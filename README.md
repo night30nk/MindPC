@@ -1,1 +1,2 @@
 # MindPC
+The Digital Wellbeing for PC system helps users monitor and manage their screen time by tracking application usage in real time. Users can set daily time limits for specific applications, receive alerts when limits are reached, and optionally restrict access to reduce distractions. The system also provides usage analytics and reports to help users understand their digital habits. Its primary goal is to improve productivity, encourage healthier computer usage, and promote a balanced digital lifestyle through an easy-to-use web dashboard and desktop application.
