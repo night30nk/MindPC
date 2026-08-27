@@ -1,0 +1,33 @@
+{
+  "name": "mindpc",
+  "version": "1.0.0",
+  "description": "Just Another Digital Wellbeing...",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "pnpx electronmon .",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/night30nk/MindPC.git"
+  },
+  "keywords": [
+    "electron",
+    "react",
+    "digital",
+    "wellbeing"
+  ],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/night30nk/MindPC/issues"
+  },
+  "homepage": "https://github.com/night30nk/MindPC#readme",
+  "devDependencies": {
+    "electron": "^43.4.1"
+  },
+  "dependencies": {
+    "electronmon": "^2.0.4"
+  }
+}
