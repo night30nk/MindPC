@@ -5,8 +5,22 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "pnpx electronmon .",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "electron": "electron .",
+    "electron-dev": "pnpx electronmon .",
+    "react-dev": "cd dashboard && pnpm run dev",
+    "test": "jest"
+  },
+  "jest": {
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/backend/",
+      "/dashboard/"
+    ]
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "active-win"
+    ]
   },
   "repository": {
     "type": "git",
@@ -25,9 +39,11 @@
   },
   "homepage": "https://github.com/night30nk/MindPC#readme",
   "devDependencies": {
-    "electron": "^43.4.1"
+    "electron": "^43.4.1",
+    "jest": "^30.5.2"
   },
   "dependencies": {
+    "active-win": "^9.0.0",
     "electronmon": "^2.0.4"
   }
 }

@@ -1,0 +1,24 @@
+# ─── Dependencies ───────────────────────────────────────────────────
+node_modules/
+
+# ─── Environment secrets ────────────────────────────────────────────
+.env
+
+# ─── Build output ───────────────────────────────────────────────────
+dist/
+build/
+
+# ─── Electron userData / offline queue ──────────────────────────────
+# These JSON files are written at runtime in the Electron userData folder.
+# If you ever commit them by mistake, add them here.
+offline-queue.json
+*.queue.json
+
+# ─── OS junk ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── Logs ───────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+pnpm-debug.log*

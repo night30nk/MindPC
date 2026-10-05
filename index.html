@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MindPC</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="app-container">
+      <!-- Header -->
+      <header class="header">
+        <div class="logo-title">
+          <div class="logo-icon">M</div>
+          <h1>MindPC</h1>
+        </div>
+        <p class="subtitle">Desktop Screen Time & Productivity Tracker</p>
+      </header>
+
+      <!-- Auth Screen (Login / Register) -->
+      <div id="authScreen" class="card">
+        <div class="tabs">
+          <button id="tabLogin" class="tab-btn active" type="button">Login</button>
+          <button id="tabRegister" class="tab-btn" type="button">Register</button>
+        </div>
+
+        <div id="authMessage" class="message hidden"></div>
+
+        <!-- Login Form -->
+        <form id="loginForm" class="auth-form">
+          <div class="form-group">
+            <label for="loginEmail">Email</label>
+            <input type="email" id="loginEmail" placeholder="name@example.com" required autocomplete="email" />
+          </div>
+          <div class="form-group">
+            <label for="loginPassword">Password</label>
+            <input type="password" id="loginPassword" placeholder="••••••••" required autocomplete="current-password" />
+          </div>
+          <button type="submit" id="loginSubmitBtn" class="btn btn-primary">Log In</button>
+        </form>
+
+        <!-- Register Form -->
+        <form id="registerForm" class="auth-form hidden">
+          <div class="form-group">
+            <label for="regName">Full Name</label>
+            <input type="text" id="regName" placeholder="Your Name" required autocomplete="name" />
+          </div>
+          <div class="form-group">
+            <label for="regEmail">Email</label>
+            <input type="email" id="regEmail" placeholder="name@example.com" required autocomplete="email" />
+          </div>
+          <div class="form-group">
+            <label for="regPassword">Password (min 6 characters)</label>
+            <input type="password" id="regPassword" placeholder="••••••••" required minlength="6" autocomplete="new-password" />
+          </div>
+          <button type="submit" id="regSubmitBtn" class="btn btn-primary">Create Account</button>
+        </form>
+      </div>
+
+      <!-- Status Screen (When logged in) -->
+      <div id="statusScreen" class="card hidden">
+        <div class="user-badge">
+          <div class="user-avatar">👤</div>
+          <div class="user-info-col">
+            <div class="user-greeting">Logged in as</div>
+            <div id="userName" class="user-name">User</div>
+          </div>
+          <div id="networkBadge" class="network-badge badge-online">Online</div>
+        </div>
+
+        <div id="authWarning" class="message error hidden">
+          ⚠️ Please log in again.
+        </div>
+
+        <div class="status-box">
+          <div class="status-indicator">
+            <span id="statusDot" class="status-dot dot-off"></span>
+            <span class="status-label">Tracking:</span>
+            <span id="trackingStatus" class="status-value">Off</span>
+          </div>
+          <div class="current-app-box">
+            <span class="current-app-label">Active App:</span>
+            <span id="currentAppName" class="current-app-name">—</span>
+          </div>
+        </div>
+
+        <!-- Sync & Queue stats -->
+        <div class="sync-stats-box">
+          <div class="stat-row">
+            <span class="stat-label">Pending sessions:</span>
+            <span id="pendingCount" class="stat-value">0</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Last sync:</span>
+            <span id="lastSyncTime" class="stat-value">Never</span>
+          </div>
+        </div>
+
+        <button id="logoutBtn" class="btn btn-secondary">Log Out</button>
+
+        <!-- Privacy & Collection Panel -->
+        <div class="privacy-panel">
+          <div class="privacy-title">🔒 What MindPC Collects</div>
+          <ul class="privacy-list">
+            <li>Application name (e.g., <code>Google Chrome</code>)</li>
+            <li>Executable name (e.g., <code>chrome.exe</code>)</li>
+            <li>Session start and end timestamps</li>
+          </ul>
+          <div class="privacy-guarantee">
+            <strong>Privacy Guarantee:</strong> MindPC never records keystrokes, screenshots, clipboard data, files, or browser page contents.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>
