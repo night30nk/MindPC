@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, powerMonitor, dialog, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, powerMonitor, dialog, Notification, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -7,13 +7,17 @@ const Storage = require('./storage');
 const { startTracking, stopTracking, isTracking } = require('./tracker');
 const autostart = require('./autostart');
 const { runSelfTest } = require('./selftest');
+const { BrowserLink, newToken } = require('./browserLink');
+const { hourlyByCategory, dailyByCategory } = require('./stats');
+const { installExtensionFolder } = require('./extensionFolder');
 const { parseLegacyQueue, findLegacyQueues } = require('./legacyImport');
-const { CATEGORIES, summarize } = require('./categories');
+const { CATEGORIES, summarize, categorize } = require('./categories');
 const { evaluateLimit, notificationText, localDateKey } = require('./limits');
 
 const RETENTION_DAYS = 90;
 const LIMIT_CHECK_MS = 30000;
 const MAX_GOAL_MINUTES = 24 * 60;
+const MAX_RANGE_DAYS = 366;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 // `--self-test` checks that this build can start (used by CI), then exits.
@@ -31,6 +35,7 @@ let mainWindow = null;
 let tray = null;
 let isQuitting = false;
 let storage = null;
+let browserLink = null;
 
 const sessionManager = new SessionManager();
 
@@ -62,7 +67,9 @@ function flushSession() {
 
 function startAppTracking() {
   if (isTracking()) return;
-  startTracking(sessionManager, storage);
+  startTracking(sessionManager, storage, undefined, {
+    getSite: () => (browserLink ? browserLink.getCurrentSite() : null),
+  });
   broadcastTracking();
 }
 
@@ -207,6 +214,33 @@ function importLegacyHistory() {
   }
 }
 
+// ── Browser companion extension ──────────────────────────────────────
+// The extension reports which site is open to a server on this computer only.
+async function startBrowserLink() {
+  let token = storage.getSetting('browserLinkToken', null);
+  if (!token) {
+    token = newToken();
+    storage.setSetting('browserLinkToken', token);
+  }
+  const link = new BrowserLink({ token });
+  try {
+    const port = await link.start();
+    browserLink = link;
+    console.log(`[BROWSER-LINK] listening on 127.0.0.1:${port}`);
+  } catch (err) {
+    // Tracking must work without it: sites just stay under the browser's name.
+    console.error('[BROWSER-LINK] not started:', err.message);
+  }
+}
+
+function browserStatus() {
+  return {
+    available: Boolean(browserLink),
+    connected: browserLink ? browserLink.isConnected() : false,
+    token: browserLink ? browserLink.token : null,
+  };
+}
+
 // ── Window ───────────────────────────────────────────────────────────
 function showWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -324,6 +358,34 @@ ipcMain.handle('stats:apps', (_event, { date }) =>
   summarize(storage.getApps(requireDate(date)), storage.getCategoryOverrides())
 );
 
+// A date range for the Week and Apps screens: validated and capped.
+function requireRange(from, to) {
+  requireDate(from);
+  requireDate(to);
+  if (from > to) throw new Error('from must be before or equal to to');
+  const days = (new Date(to) - new Date(from)) / 86400000 + 1;
+  if (days > MAX_RANGE_DAYS) throw new Error(`Range is limited to ${MAX_RANGE_DAYS} days`);
+}
+
+// Minutes per hour of one day, split by category (the Week screen's hourly chart).
+ipcMain.handle('stats:hourly', (_event, { date }) =>
+  hourlyByCategory(storage.getSessions(requireDate(date)), storage.getCategoryOverrides())
+);
+
+// Seconds per category for each day in a range.
+ipcMain.handle('stats:week', (_event, { from, to }) => {
+  requireRange(from, to);
+  return dailyByCategory(storage.getDailyApps(from, to), storage.getCategoryOverrides(), from, to);
+});
+
+// Apps and sites across a range, each with its category, plus totals per category.
+ipcMain.handle('stats:appsRange', (_event, { from, to }) => {
+  requireRange(from, to);
+  return summarize(storage.getAppsRange(from, to), storage.getCategoryOverrides());
+});
+
+ipcMain.handle('app:info', () => ({ version: app.getVersion(), platform: process.platform }));
+
 ipcMain.handle('category:set', (_event, { appName, category }) => {
   if (typeof appName !== 'string' || appName.length === 0 || appName.length > 200) {
     throw new Error('Invalid app name');
@@ -346,11 +408,41 @@ ipcMain.handle('goal:set', (_event, { minutes }) => {
   return { minutes };
 });
 
-ipcMain.handle('sessions:list', (_event, { date }) => storage.getSessions(requireDate(date)));
+// Sessions of one day, each with its category (so the day can be drawn in colour).
+ipcMain.handle('sessions:list', (_event, { date }) => {
+  const overrides = storage.getCategoryOverrides();
+  return storage.getSessions(requireDate(date)).map((row) => ({
+    ...row,
+    category: categorize(row.app_name, row.app_identifier, overrides),
+  }));
+});
 
 ipcMain.handle('autostart:get', () => getAutostartState());
 
 ipcMain.handle('autostart:set', (_event, { enabled }) => setAutostartEnabled(enabled));
+
+ipcMain.handle('browser:status', () => browserStatus());
+
+// A new code voids every earlier pairing, so a leaked code can be revoked.
+ipcMain.handle('browser:resetToken', () => {
+  if (!browserLink) return browserStatus();
+  const token = newToken();
+  storage.setSetting('browserLinkToken', token);
+  browserLink.setToken(token);
+  return browserStatus();
+});
+
+// Copies the bundled extension to a permanent folder and opens it, so the user can
+// load it in their browser ("Load unpacked"). Browsers do not let an app install
+// an extension silently.
+ipcMain.handle('browser:revealExtension', async () => {
+  const dest = installExtensionFolder(
+    path.join(__dirname, 'extension'),
+    path.join(app.getPath('userData'), 'browser-extension')
+  );
+  const error = await shell.openPath(dest); // empty string on success
+  return { path: dest, opened: error === '', error: error || null };
+});
 
 ipcMain.handle('tracking:get', () => ({ tracking: isTracking() }));
 
@@ -409,6 +501,7 @@ gotLock && app.whenReady().then(async () => {
   recoverCrashedSession();
   importLegacyHistory();
   storage.purgeOlderThan(RETENTION_DAYS);
+  await startBrowserLink();
 
   // The tray comes first: a window started hidden at login is only reachable
   // through it, so only hide when a tray icon exists.
@@ -435,6 +528,7 @@ gotLock && app.whenReady().then(async () => {
 app.on('before-quit', () => {
   isQuitting = true;
   stopTracking();
+  if (browserLink) browserLink.stop();
   if (storage) {
     flushSession();
     storage.close();

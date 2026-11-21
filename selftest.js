@@ -8,6 +8,8 @@ const os = require('node:os');
 const path = require('node:path');
 const Storage = require('./storage');
 const { probeActiveWindow } = require('./tracker');
+const http = require('node:http');
+const { BrowserLink, newToken } = require('./browserLink');
 
 async function runSelfTest({ nativeImage, outFile }) {
   const checks = {};
@@ -46,6 +48,43 @@ async function runSelfTest({ nativeImage, outFile }) {
   await check('activeWindow', async () => {
     const win = await probeActiveWindow();
     return win && win.owner ? `read "${win.owner.name}"` : 'call succeeded, no focused window';
+  });
+
+  // The extension connection must start, accept a paired report, and refuse an
+  // unpaired one. (Uses any free port and a throwaway token.)
+  await check('browserLink', async () => {
+    const token = newToken();
+    const link = new BrowserLink({ token, ports: [0] });
+    const port = await link.start();
+    const post = (auth) =>
+      new Promise((resolve, reject) => {
+        const body = JSON.stringify({ instanceId: 'selftest-instance', domain: 'example.com', focused: true });
+        const req = http.request(
+          { host: '127.0.0.1', port, method: 'POST', path: '/v1/report', headers: { Authorization: auth, 'Content-Length': Buffer.byteLength(body) } },
+          (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); }
+        );
+        req.on('error', reject);
+        req.end(body);
+      });
+    try {
+      if ((await post('Bearer wrong')) !== 401) throw new Error('an unpaired request was not refused');
+      if ((await post(`Bearer ${token}`)) !== 204) throw new Error('a paired report was not accepted');
+      if (link.getCurrentSite() !== 'example.com') throw new Error('the reported site was not kept');
+      return `listening on 127.0.0.1:${port}; refuses unpaired, accepts paired`;
+    } finally {
+      await link.stop();
+    }
+  });
+
+  await check('extensionBundle', () => {
+    const file = path.join(__dirname, 'extension', 'manifest.json');
+    if (!fs.existsSync(file)) throw new Error(`missing ${file}`);
+    const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (manifest.manifest_version !== 3 || !manifest.background) throw new Error('extension manifest is not valid');
+    for (const f of ['background.js', 'popup.html', 'popup.js']) {
+      if (!fs.existsSync(path.join(__dirname, 'extension', f))) throw new Error(`extension is missing ${f}`);
+    }
+    return `extension ${manifest.version} is bundled`;
   });
 
   await check('dashboard', () => {

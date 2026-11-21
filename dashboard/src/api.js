@@ -3,7 +3,7 @@
 
 function bridge() {
   if (!window.mindpc) {
-    throw new Error('MindPC must be opened from the desktop app.');
+    throw new Error("MindPC must be opened from the desktop app.");
   }
   return window.mindpc;
 }
@@ -12,9 +12,16 @@ export const api = {
   getDaily: (from, to) => bridge().getDaily(from, to),
   getApps: (date) => bridge().getApps(date),
   getSessions: (date) => bridge().getSessions(date),
+  getHourly: (date) => bridge().getHourly(date),
+  getWeek: (from, to) => bridge().getWeek(from, to),
+  getAppsRange: (from, to) => bridge().getAppsRange(from, to),
+  getAppInfo: () => bridge().getAppInfo(),
   setCategory: (appName, category) => bridge().setCategory(appName, category),
   getGoal: () => bridge().getGoal(),
   setGoal: (minutes) => bridge().setGoal(minutes),
+  getBrowserStatus: () => bridge().getBrowserStatus(),
+  resetBrowserToken: () => bridge().resetBrowserToken(),
+  revealExtension: () => bridge().revealExtension(),
   getTracking: () => bridge().getTracking(),
   setTracking: (enabled) => bridge().setTracking(enabled),
   getAutostart: () => bridge().getAutostart(),
@@ -24,52 +31,27 @@ export const api = {
   onTrackingChange: (cb) => bridge().onTrackingChange(cb),
 };
 
-// ── Formatter Helpers ────────────────────────────────────────────────
 export function formatDuration(seconds) {
-  if (!seconds || seconds <= 0) return '0m';
+  if (!seconds || seconds <= 0) return "0m";
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
-
   if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m`;
   if (hours > 0) return `${hours}h`;
   return `${minutes}m`;
 }
 
 export function formatTime(isoString) {
-  if (!isoString) return '—';
-  try {
-    const d = new Date(isoString);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  } catch {
-    return '—';
-  }
+  if (!isoString) return "—";
+  const d = new Date(isoString);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-export function formatShortDate(dateStr) {
-  if (!dateStr) return '';
-  try {
-    // dateStr is YYYY-MM-DD
-    const [year, month, day] = dateStr.split('T')[0].split('-').map(Number);
-    const d = new Date(year, month - 1, day);
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-  } catch {
-    return dateStr;
-  }
-}
+export const SITE_PREFIX = "site:";
+export const isSite = (entry) => Boolean(entry.identifier && entry.identifier.startsWith(SITE_PREFIX));
 
-export function getTodayString() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-export function getNDaysAgoString(daysAgo, baseDateStr) {
-  const base = baseDateStr ? new Date(baseDateStr) : new Date();
-  base.setDate(base.getDate() - daysAgo);
-  const year = base.getFullYear();
-  const month = String(base.getMonth() + 1).padStart(2, '0');
-  const day = String(base.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
+export const CATEGORIES = {
+  productive: { label: "Productive", color: "var(--prod)" },
+  neutral: { label: "Neutral", color: "var(--neu)" },
+  distracting: { label: "Distracting", color: "var(--dis)" },
+};
+export const CATEGORY_ORDER = ["productive", "neutral", "distracting"];
