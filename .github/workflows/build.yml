@@ -2,7 +2,7 @@ name: Build installers
 
 # Windows and Linux installers cannot be built reliably from a Mac, so each OS
 # builds on its own runner. Run it by hand from the Actions tab, or push a tag
-# like v1.0.0 to also publish a draft GitHub release with all installers.
+# like v0.1.0 to also publish a draft GitHub release with all installers.
 on:
   push:
     tags: ['v*']

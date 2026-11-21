@@ -1,6 +1,6 @@
 {
   "name": "mindpc",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Local-first digital wellbeing tracker. Your data stays on your computer.",
   "main": "main.js",
   "scripts": {
