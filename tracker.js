@@ -1,5 +1,6 @@
 const path = require('node:path');
 const { getIdleSeconds, IDLE_THRESHOLD_SECONDS } = require('./idle');
+const { isOwnWindow } = require('./ownApp');
 
 const TICK_MS = 3000;
 
@@ -57,7 +58,8 @@ function startTracking(sessionManager, storage, onTick) {
       const winInfo = await getActiveWindow();
       // Tracking may have been stopped while we awaited the OS.
       if (!intervalId) return;
-      if (winInfo && winInfo.owner) {
+      // MindPC's own window counts as no active app, not as usage of any app.
+      if (winInfo && winInfo.owner && !isOwnWindow(winInfo.owner)) {
         appName = winInfo.owner.name || 'Unknown';
         appIdentifier = winInfo.owner.path
           ? path.basename(winInfo.owner.path)

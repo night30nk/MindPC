@@ -50,10 +50,15 @@ class SessionManager {
     );
   }
 
+  _finalizeSession(session, endTimestamp) {
+    return SessionManager.splitAtMidnight(session, endTimestamp);
+  }
+
   // Completes a session and returns an array of session objects.
   // Sessions under 2 seconds are dropped. Sessions that span local midnight are
   // split so each day gets only the time that actually fell on it.
-  _finalizeSession(session, endTimestamp) {
+  // session: { appName, appIdentifier, startTime (ms) }
+  static splitAtMidnight(session, endTimestamp) {
     const startMs = session.startTime;
     const endMs = Math.max(startMs, endTimestamp);
 
