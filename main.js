@@ -1,12 +1,16 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, powerMonitor, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, powerMonitor, dialog, Notification } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const SessionManager = require('./sessionManager');
 const Storage = require('./storage');
 const { startTracking, stopTracking, isTracking } = require('./tracker');
 const autostart = require('./autostart');
+const { CATEGORIES, summarize } = require('./categories');
+const { evaluateLimit, notificationText, localDateKey } = require('./limits');
 
 const RETENTION_DAYS = 90;
+const LIMIT_CHECK_MS = 30000;
+const MAX_GOAL_MINUTES = 24 * 60;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 // Set by `pnpm dev` so the window loads the Vite dev server with hot reload.
@@ -64,6 +68,44 @@ function recoverCrashedSession() {
   if (!open) return;
   storage.addSessions(sessionManager.recover(open));
   storage.saveOpenSession(null);
+}
+
+// ── Daily goal ───────────────────────────────────────────────────────
+// Screen time so far today: saved sessions plus the one still in progress.
+function todaySeconds(now = new Date()) {
+  const today = localDateKey(now);
+  let total = storage.getDaily(today, today)[0]?.duration ?? 0;
+
+  const open = sessionManager.getOpenState();
+  if (open) {
+    const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const start = Math.max(open.startTime, midnight);
+    total += Math.max(0, (open.lastSeenTime - start) / 1000);
+  }
+  return total;
+}
+
+function checkGoal() {
+  if (!storage) return;
+  const limitMinutes = storage.getSetting('dailyLimitMinutes', null);
+  const previous = storage.getSetting('limitState', null);
+  const { notify, state } = evaluateLimit({
+    totalSeconds: todaySeconds(),
+    limitMinutes,
+    today: localDateKey(),
+    state: previous,
+  });
+
+  if (JSON.stringify(state) !== JSON.stringify(previous)) {
+    storage.setSetting('limitState', state);
+  }
+  if (notify === null) return;
+
+  console.log(`[GOAL] ${notify}% of the daily goal reached`);
+  if (!Notification.isSupported()) return;
+  const notification = new Notification(notificationText(notify, limitMinutes));
+  notification.on('click', () => showWindow());
+  notification.show();
 }
 
 // ── Launch at login ──────────────────────────────────────────────────
@@ -219,7 +261,32 @@ ipcMain.handle('stats:daily', (_event, { from, to }) => {
   return storage.getDaily(from, to);
 });
 
-ipcMain.handle('stats:apps', (_event, { date }) => storage.getApps(requireDate(date)));
+// Apps for a day, each with its category, plus seconds per category.
+ipcMain.handle('stats:apps', (_event, { date }) =>
+  summarize(storage.getApps(requireDate(date)), storage.getCategoryOverrides())
+);
+
+ipcMain.handle('category:set', (_event, { appName, category }) => {
+  if (typeof appName !== 'string' || appName.length === 0 || appName.length > 200) {
+    throw new Error('Invalid app name');
+  }
+  if (category !== null && !CATEGORIES.includes(category)) {
+    throw new Error('Invalid category');
+  }
+  storage.setCategoryOverride(appName, category);
+  return { appName, category };
+});
+
+ipcMain.handle('goal:get', () => ({ minutes: storage.getSetting('dailyLimitMinutes', null) }));
+
+ipcMain.handle('goal:set', (_event, { minutes }) => {
+  if (minutes !== null && !(Number.isInteger(minutes) && minutes >= 1 && minutes <= MAX_GOAL_MINUTES)) {
+    throw new Error('Goal must be between 1 minute and 24 hours');
+  }
+  storage.setSetting('dailyLimitMinutes', minutes);
+  checkGoal();
+  return { minutes };
+});
 
 ipcMain.handle('sessions:list', (_event, { date }) => storage.getSessions(requireDate(date)));
 
@@ -266,6 +333,7 @@ ipcMain.handle('data:deleteAll', async () => {
   if (response !== 1) return { deleted: false };
 
   storage.deleteAll();
+  storage.setSetting('limitState', null);
   // Drop the live session too, so tracking restarts from a clean slate.
   sessionManager.flush();
   return { deleted: true };
@@ -284,6 +352,8 @@ gotLock && app.whenReady().then(() => {
   createWindow({ hidden: startHidden });
   startAppTracking();
   if (!startHidden) askAboutAutostartOnce();
+  checkGoal();
+  setInterval(checkGoal, LIMIT_CHECK_MS);
 
   // Sleeping, locking or shutting down ends the session cleanly instead of
   // letting it run until the next tick notices the gap.

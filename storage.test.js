@@ -40,8 +40,8 @@ describe('Storage', () => {
     ]);
 
     expect(store.getApps('2024-01-10')).toEqual([
-      { name: 'Code', duration: 300 },
-      { name: 'Chrome', duration: 150 },
+      { name: 'Code', identifier: 'code.exe', duration: 300 },
+      { name: 'Chrome', identifier: 'chrome.exe', duration: 150 },
     ]);
   });
 
@@ -137,6 +137,52 @@ describe('Storage', () => {
     expect(upgraded.exportAll()).toHaveLength(1);
     upgraded.setSetting('x', 1);
     expect(upgraded.getSetting('x')).toBe(1);
+    upgraded.close();
+    fs.rmSync(path.dirname(file), { recursive: true });
+  });
+
+  it('stores, replaces and clears category overrides', () => {
+    expect(store.getCategoryOverrides()).toEqual({});
+
+    store.setCategoryOverride('Netflix', 'neutral');
+    store.setCategoryOverride('Chrome', 'productive');
+    store.setCategoryOverride('Netflix', 'distracting');
+    expect(store.getCategoryOverrides()).toEqual({ Netflix: 'distracting', Chrome: 'productive' });
+
+    store.setCategoryOverride('Netflix', null);
+    expect(store.getCategoryOverrides()).toEqual({ Chrome: 'productive' });
+  });
+
+  it('rejects an unknown category and keeps overrides when data is deleted', () => {
+    expect(() => store.setCategoryOverride('Foo', 'bogus')).toThrow();
+
+    store.setCategoryOverride('Chrome', 'productive');
+    store.addSessions([session(day1, 60)]);
+    store.deleteAll();
+    expect(store.getCategoryOverrides()).toEqual({ Chrome: 'productive' });
+  });
+
+  it('upgrades a version 2 database (settings, no overrides) without data loss', () => {
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const path = require('node:path');
+    const { DatabaseSync } = require('node:sqlite');
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'mindpc-')), 'v2.db');
+
+    const old = new Storage(file);
+    old.addSessions([session(day1, 60)]);
+    old.setSetting('autostartAsked', true);
+    old.close();
+    // Roll the file back to how the previous release left it.
+    const raw = new DatabaseSync(file);
+    raw.exec('DROP TABLE category_overrides; PRAGMA user_version = 2;');
+    raw.close();
+
+    const upgraded = new Storage(file);
+    expect(upgraded.exportAll()).toHaveLength(1);
+    expect(upgraded.getSetting('autostartAsked')).toBe(true);
+    upgraded.setCategoryOverride('Chrome', 'productive');
+    expect(upgraded.getCategoryOverrides()).toEqual({ Chrome: 'productive' });
     upgraded.close();
     fs.rmSync(path.dirname(file), { recursive: true });
   });

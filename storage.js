@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 class Storage {
   /**
@@ -56,6 +56,15 @@ class Storage {
         CREATE TABLE settings (
           key   TEXT PRIMARY KEY,
           value TEXT NOT NULL
+        );
+      `);
+    }
+    if (version < 3) {
+      this.db.exec(`
+        -- The user's own category choice for an app, overriding the defaults.
+        CREATE TABLE category_overrides (
+          app_name TEXT PRIMARY KEY,
+          category TEXT NOT NULL CHECK (category IN ('productive', 'neutral', 'distracting'))
         );
       `);
     }
@@ -129,11 +138,36 @@ class Storage {
       .all(date);
   }
 
-  // Total seconds per app for one local day, biggest first.
+  getCategoryOverrides() {
+    const overrides = {};
+    for (const row of this.db.prepare('SELECT app_name, category FROM category_overrides').all()) {
+      overrides[row.app_name] = row.category;
+    }
+    return overrides;
+  }
+
+  // category = null removes the override and returns the app to its default.
+  setCategoryOverride(appName, category) {
+    if (category === null) {
+      this.db.prepare('DELETE FROM category_overrides WHERE app_name = ?').run(appName);
+      return;
+    }
+    this.db
+      .prepare(
+        `INSERT INTO category_overrides (app_name, category) VALUES (?, ?)
+         ON CONFLICT(app_name) DO UPDATE SET category = excluded.category`
+      )
+      .run(appName, category);
+  }
+
+  // Total seconds per app for one local day, biggest first. `identifier` is the
+  // executable name of the app's most recent session that day (used to pick a
+  // default category).
   getApps(date) {
     return this.db
       .prepare(
-        `SELECT app_name AS name, SUM(duration_seconds) AS duration
+        `SELECT app_name AS name, MAX(app_identifier) AS identifier,
+                SUM(duration_seconds) AS duration
          FROM sessions
          WHERE date(start_time, 'localtime') = ?
          GROUP BY app_name
@@ -195,6 +229,7 @@ class Storage {
   }
 
   deleteAll() {
+    // Tracked data only: preferences and category choices are kept.
     this._transaction(() => {
       this.db.exec('DELETE FROM sessions');
       this.db.exec('DELETE FROM open_session');
