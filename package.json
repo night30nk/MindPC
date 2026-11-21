@@ -7,7 +7,13 @@
     "start": "pnpm build:dashboard && electron .",
     "build:dashboard": "pnpm --dir dashboard build",
     "dev": "concurrently -k -n dashboard,app \"pnpm --dir dashboard dev\" \"wait-on tcp:5173 && cross-env MINDPC_DEV_URL=http://localhost:5173 electronmon .\"",
-    "test": "jest"
+    "test": "jest",
+    "icons": "node scripts/make-icons.js",
+    "dist:dir": "pnpm build:dashboard && electron-builder --dir",
+    "dist": "pnpm build:dashboard && electron-builder --publish never",
+    "dist:mac": "pnpm build:dashboard && electron-builder --mac",
+    "dist:win": "pnpm build:dashboard && electron-builder --win",
+    "dist:linux": "pnpm build:dashboard && electron-builder --linux"
   },
   "jest": {
     "testPathIgnorePatterns": [
@@ -17,7 +23,8 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "active-win"
+      "active-win",
+      "electron"
     ]
   },
   "repository": {
@@ -40,11 +47,77 @@
     "concurrently": "^10.0.7",
     "cross-env": "^10.1.0",
     "electron": "^43.4.1",
+    "electron-builder": "^26.18.0",
+    "electronmon": "^2.0.4",
     "jest": "^30.5.2",
     "wait-on": "^9.5.1"
   },
   "dependencies": {
-    "active-win": "^9.0.0",
-    "electronmon": "^2.0.4"
+    "active-win": "^9.0.0"
+  },
+  "productName": "MindPC",
+  "build": {
+    "appId": "com.mindpc.app",
+    "productName": "MindPC",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "tracker.js",
+      "idle.js",
+      "sessionManager.js",
+      "storage.js",
+      "assets/**",
+      "dashboard/dist/**",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ]
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility",
+      "maintainer": "MindPC <noreply@users.noreply.github.com>"
+    },
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "afterPack": "scripts/after-pack.js",
+    "npmRebuild": false,
+    "asar": false
   }
 }

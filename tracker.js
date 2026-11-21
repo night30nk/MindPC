@@ -5,6 +5,7 @@ const TICK_MS = 3000;
 
 let intervalId = null;
 let activeWinFn = null;
+let lastError = null;
 
 // Dynamic import for active-win (ESM package)
 async function getActiveWindow() {
@@ -13,9 +14,21 @@ async function getActiveWindow() {
       const mod = await import('active-win');
       activeWinFn = mod.activeWindow;
     }
-    return await activeWinFn();
-  } catch {
-    // Treat errors (e.g. lock screen, screen saver, no focused window) as no active window
+    // MindPC only needs the app name. Disabling these checks means macOS never
+    // asks for Accessibility or Screen Recording access, and window titles and
+    // URLs are never read.
+    return await activeWinFn({
+      accessibilityPermission: false,
+      screenRecordingPermission: false,
+    });
+  } catch (err) {
+    // Treat errors (e.g. lock screen, screen saver, no focused window) as no
+    // active window. Log each distinct error once so a broken install is
+    // visible instead of silently recording nothing.
+    if (err.message !== lastError) {
+      lastError = err.message;
+      console.error('[TRACKER] Could not read the active window:', err.message);
+    }
     return null;
   }
 }

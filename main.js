@@ -132,9 +132,14 @@ function updateTrayMenu() {
 
 function createTray() {
   try {
-    const icon = nativeImage.createFromDataURL(
-      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAZElEQVQ4T2NkoBAwUqifYdQAUmzg/38Ghv9nGBj+n2Vg+P8fjwYGBob///4zMDCiG8D4n4GBgeE/QxO6Bv7/fxqLBlAUI8s2og1A1k14XUvQBmLSz8j0M+H4mFSAETVSEjQSZAMA+4M6n/i6xT0AAAAASUVORK5CYII='
+    // macOS menu bar wants a black "template" image it can recolour for dark
+    // mode (trayTemplate@2x.png is picked up automatically). Elsewhere, use the
+    // colour icon.
+    const isMac = process.platform === 'darwin';
+    const icon = nativeImage.createFromPath(
+      path.join(__dirname, 'assets', isMac ? 'trayTemplate.png' : 'tray.png')
     );
+    if (isMac) icon.setTemplateImage(true);
     tray = new Tray(icon);
     tray.setToolTip('MindPC');
     tray.on('double-click', () => showWindow());
