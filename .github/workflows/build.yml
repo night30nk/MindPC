@@ -40,6 +40,16 @@ jobs:
       # `dist` never publishes; the release job below does that.
       - run: pnpm dist
 
+      # Linux CI has no display; xvfb provides one. x11-utils (xprop, xwininfo)
+      # is what MindPC needs on a real Linux desktop to see the active window.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb x11-utils
+
+      # Starts the packaged app in self-test mode: fails the build if it cannot
+      # start, open its database, run the active-window helper or find its files.
+      - name: Smoke test the packaged app
+        run: pnpm smoke
+
       - uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.os }}
