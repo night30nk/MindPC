@@ -92,4 +92,52 @@ describe('Storage', () => {
     expect(store.purgeOlderThan(90, now)).toBe(1);
     expect(store.exportAll()).toHaveLength(1);
   });
+
+  it('stores settings with their type and returns a fallback when unset', () => {
+    expect(store.getSetting('autostartAsked')).toBeNull();
+    expect(store.getSetting('autostartAsked', false)).toBe(false);
+
+    store.setSetting('autostartAsked', true);
+    store.setSetting('dailyLimitMinutes', 90);
+    store.setSetting('autostartAsked', false);
+
+    expect(store.getSetting('autostartAsked')).toBe(false);
+    expect(store.getSetting('dailyLimitMinutes')).toBe(90);
+  });
+
+  it('keeps settings when tracked data is deleted', () => {
+    store.setSetting('autostartAsked', true);
+    store.addSessions([session(day1, 60)]);
+    store.deleteAll();
+    expect(store.getSetting('autostartAsked')).toBe(true);
+  });
+
+  it('upgrades a version 1 database without losing sessions', () => {
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const path = require('node:path');
+    const { DatabaseSync } = require('node:sqlite');
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'mindpc-')), 'old.db');
+
+    // A database exactly as the first released version created it.
+    const old = new DatabaseSync(file);
+    old.exec(`
+      CREATE TABLE sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, app_name TEXT NOT NULL,
+        app_identifier TEXT NOT NULL, start_time TEXT NOT NULL, end_time TEXT NOT NULL,
+        duration_seconds INTEGER NOT NULL);
+      CREATE TABLE open_session (id INTEGER PRIMARY KEY CHECK (id = 1), app_name TEXT NOT NULL,
+        app_identifier TEXT NOT NULL, start_ms INTEGER NOT NULL, last_seen_ms INTEGER NOT NULL);
+      INSERT INTO sessions (app_name, app_identifier, start_time, end_time, duration_seconds)
+        VALUES ('Chrome', 'chrome.exe', '2024-01-10T09:00:00.000Z', '2024-01-10T09:01:00.000Z', 60);
+      PRAGMA user_version = 1;
+    `);
+    old.close();
+
+    const upgraded = new Storage(file);
+    expect(upgraded.exportAll()).toHaveLength(1);
+    upgraded.setSetting('x', 1);
+    expect(upgraded.getSetting('x')).toBe(1);
+    upgraded.close();
+    fs.rmSync(path.dirname(file), { recursive: true });
+  });
 });

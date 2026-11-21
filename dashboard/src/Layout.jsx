@@ -4,6 +4,7 @@ import { api } from "./api";
 const Layout = ({ children }) => {
   const [tracking, setTracking] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [autostart, setAutostart] = useState({ available: false, enabled: false });
 
   useEffect(() => {
     let off = () => {};
@@ -11,6 +12,10 @@ const Layout = ({ children }) => {
       .getTracking()
       .then((s) => setTracking(s.tracking))
       .catch(() => setTracking(null));
+    api
+      .getAutostart()
+      .then(setAutostart)
+      .catch(() => setAutostart({ available: false, enabled: false }));
     try {
       off = api.onTrackingChange((s) => setTracking(s.tracking));
     } catch {
@@ -28,6 +33,10 @@ const Layout = ({ children }) => {
   const toggleTracking = async () => {
     const s = await api.setTracking(!tracking);
     setTracking(s.tracking);
+  };
+
+  const toggleAutostart = async () => {
+    setAutostart(await api.setAutostart(!autostart.enabled));
   };
 
   const handleExport = async () => {
@@ -66,6 +75,11 @@ const Layout = ({ children }) => {
                   }`}
                 />
                 {tracking ? "Tracking · Pause" : "Paused · Resume"}
+              </button>
+            )}
+            {autostart.available && (
+              <button onClick={toggleAutostart} className={buttonClass}>
+                Launch at login: {autostart.enabled ? "On" : "Off"}
               </button>
             )}
             <button onClick={handleExport} className={buttonClass}>

@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 class Storage {
   /**
@@ -47,6 +47,15 @@ class Storage {
           app_identifier TEXT    NOT NULL,
           start_ms       INTEGER NOT NULL,
           last_seen_ms   INTEGER NOT NULL
+        );
+      `);
+    }
+    if (version < 2) {
+      this.db.exec(`
+        -- Small key/value store for app preferences.
+        CREATE TABLE settings (
+          key   TEXT PRIMARY KEY,
+          value TEXT NOT NULL
         );
       `);
     }
@@ -159,6 +168,21 @@ class Storage {
       result.push({ date: key, duration: byDate.get(key) || 0 });
     }
     return result;
+  }
+
+  // Settings are stored as JSON so booleans and numbers keep their type.
+  getSetting(key, fallback = null) {
+    const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+    return row ? JSON.parse(row.value) : fallback;
+  }
+
+  setSetting(key, value) {
+    this.db
+      .prepare(
+        `INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+      )
+      .run(key, JSON.stringify(value));
   }
 
   exportAll() {

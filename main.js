@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const SessionManager = require('./sessionManager');
 const Storage = require('./storage');
 const { startTracking, stopTracking, isTracking } = require('./tracker');
+const autostart = require('./autostart');
 
 const RETENTION_DAYS = 90;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -65,6 +66,48 @@ function recoverCrashedSession() {
   storage.saveOpenSession(null);
 }
 
+// ── Launch at login ──────────────────────────────────────────────────
+// Only for the installed app: in development the "app" is the generic Electron
+// binary, and registering that as a login item would be wrong.
+function getAutostartState() {
+  if (!app.isPackaged) return { available: false, enabled: false };
+  try {
+    return { available: true, enabled: autostart.getAutostart(app) };
+  } catch (err) {
+    console.error('[AUTOSTART] Could not read login item:', err.message);
+    return { available: false, enabled: false };
+  }
+}
+
+function setAutostartEnabled(enabled) {
+  if (!app.isPackaged) return getAutostartState();
+  try {
+    autostart.setAutostart(app, Boolean(enabled));
+  } catch (err) {
+    console.error('[AUTOSTART] Could not change login item:', err.message);
+  }
+  updateTrayMenu();
+  return getAutostartState();
+}
+
+// Asked once, on first run, because a tracker is only useful if it is running.
+async function askAboutAutostartOnce() {
+  if (!getAutostartState().available || storage.getSetting('autostartAsked', false)) return;
+  storage.setSetting('autostartAsked', true);
+
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    buttons: ['Start automatically', 'Not now'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Launch at login',
+    message: 'Start MindPC when you log in?',
+    detail:
+      'MindPC only records time while it is running. It starts quietly in the tray. You can change this anytime from the tray menu or the dashboard.',
+  });
+  if (response === 0) setAutostartEnabled(true);
+}
+
 // ── Window ───────────────────────────────────────────────────────────
 function showWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -76,8 +119,9 @@ function showWindow() {
   mainWindow.focus();
 }
 
-function createWindow() {
+function createWindow({ hidden = false } = {}) {
   mainWindow = new BrowserWindow({
+    show: !hidden,
     width: 1100,
     height: 760,
     minWidth: 720,
@@ -118,6 +162,16 @@ function updateTrayMenu() {
         label: isTracking() ? 'Pause tracking' : 'Resume tracking',
         click: () => (isTracking() ? stopAppTracking() : startAppTracking()),
       },
+      ...(getAutostartState().available
+        ? [
+            {
+              label: 'Launch at login',
+              type: 'checkbox',
+              checked: getAutostartState().enabled,
+              click: (item) => setAutostartEnabled(item.checked),
+            },
+          ]
+        : []),
       { type: 'separator' },
       {
         label: 'Quit',
@@ -169,6 +223,10 @@ ipcMain.handle('stats:apps', (_event, { date }) => storage.getApps(requireDate(d
 
 ipcMain.handle('sessions:list', (_event, { date }) => storage.getSessions(requireDate(date)));
 
+ipcMain.handle('autostart:get', () => getAutostartState());
+
+ipcMain.handle('autostart:set', (_event, { enabled }) => setAutostartEnabled(enabled));
+
 ipcMain.handle('tracking:get', () => ({ tracking: isTracking() }));
 
 ipcMain.handle('tracking:set', (_event, { enabled }) => {
@@ -219,9 +277,13 @@ gotLock && app.whenReady().then(() => {
   recoverCrashedSession();
   storage.purgeOlderThan(RETENTION_DAYS);
 
-  createWindow();
+  // The tray comes first: a window started hidden at login is only reachable
+  // through it, so only hide when a tray icon exists.
   createTray();
+  const startHidden = Boolean(tray) && autostart.wasStartedHidden(app);
+  createWindow({ hidden: startHidden });
   startAppTracking();
+  if (!startHidden) askAboutAutostartOnce();
 
   // Sleeping, locking or shutting down ends the session cleanly instead of
   // letting it run until the next tick notices the gap.

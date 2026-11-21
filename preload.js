@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('mindpc', {
   getSessions: (date) => ipcRenderer.invoke('sessions:list', { date }),
   getTracking: () => ipcRenderer.invoke('tracking:get'),
   setTracking: (enabled) => ipcRenderer.invoke('tracking:set', { enabled }),
+  getAutostart: () => ipcRenderer.invoke('autostart:get'),
+  setAutostart: (enabled) => ipcRenderer.invoke('autostart:set', { enabled }),
   exportData: () => ipcRenderer.invoke('data:export'),
   deleteAllData: () => ipcRenderer.invoke('data:deleteAll'),
   onTrackingChange: (callback) => {
