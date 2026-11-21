@@ -7,6 +7,7 @@ const Storage = require('./storage');
 const { startTracking, stopTracking, isTracking } = require('./tracker');
 const autostart = require('./autostart');
 const { runSelfTest } = require('./selftest');
+const { parseLegacyQueue, findLegacyQueues } = require('./legacyImport');
 const { CATEGORIES, summarize } = require('./categories');
 const { evaluateLimit, notificationText, localDateKey } = require('./limits');
 
@@ -70,6 +71,18 @@ function stopAppTracking() {
   stopTracking();
   flushSession();
   broadcastTracking();
+}
+
+// Pausing is remembered, so restarting the app does not silently resume
+// tracking. The tray tooltip and the dashboard button show when it is paused.
+function pauseTracking() {
+  storage.setSetting('trackingPaused', true);
+  stopAppTracking();
+}
+
+function resumeTracking() {
+  storage.setSetting('trackingPaused', false);
+  startAppTracking();
 }
 
 // If the app crashed or lost power, close whatever was open at the last tick.
@@ -160,6 +173,40 @@ async function askAboutAutostartOnce() {
   if (response === 0) setAutostartEnabled(true);
 }
 
+// History from the first, server-based version, imported once.
+function importLegacyHistory() {
+  if (storage.getSetting('legacyImported', false)) return;
+
+  // The first version used the package name for its data folder; this one uses
+  // the product name, which differs in case or spelling on some systems.
+  const files = findLegacyQueues([
+    app.getPath('userData'),
+    path.join(app.getPath('appData'), 'mindpc'),
+  ]);
+
+  let imported = 0;
+  let ownApp = 0;
+  let skipped = 0;
+  for (const file of files) {
+    const result = parseLegacyQueue(fs.readFileSync(file, 'utf8'));
+    if (result.error) {
+      console.error(`[IMPORT] Ignoring ${file}: ${result.error}`);
+      continue;
+    }
+    storage.addSessions(result.sessions);
+    imported += result.sessions.length;
+    ownApp += result.ownApp;
+    skipped += result.skipped;
+  }
+
+  // Marked done only after a successful write, so a database error retries on
+  // the next launch instead of losing the import.
+  storage.setSetting('legacyImported', true);
+  if (files.length > 0) {
+    console.log(`[IMPORT] Imported ${imported} sessions (${ownApp} own-app and ${skipped} invalid rows skipped)`);
+  }
+}
+
 // ── Window ───────────────────────────────────────────────────────────
 function showWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -207,12 +254,13 @@ function createWindow({ hidden = false } = {}) {
 // ── Tray ─────────────────────────────────────────────────────────────
 function updateTrayMenu() {
   if (!tray) return;
+  tray.setToolTip(isTracking() ? 'MindPC' : 'MindPC (paused)');
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: 'Open MindPC', click: () => showWindow() },
       {
         label: isTracking() ? 'Pause tracking' : 'Resume tracking',
-        click: () => (isTracking() ? stopAppTracking() : startAppTracking()),
+        click: () => (isTracking() ? pauseTracking() : resumeTracking()),
       },
       ...(getAutostartState().available
         ? [
@@ -307,8 +355,8 @@ ipcMain.handle('autostart:set', (_event, { enabled }) => setAutostartEnabled(ena
 ipcMain.handle('tracking:get', () => ({ tracking: isTracking() }));
 
 ipcMain.handle('tracking:set', (_event, { enabled }) => {
-  if (enabled) startAppTracking();
-  else stopAppTracking();
+  if (enabled) resumeTracking();
+  else pauseTracking();
   return { tracking: isTracking() };
 });
 
@@ -359,6 +407,7 @@ gotLock && app.whenReady().then(async () => {
 
   storage = new Storage(path.join(app.getPath('userData'), 'mindpc.db'));
   recoverCrashedSession();
+  importLegacyHistory();
   storage.purgeOlderThan(RETENTION_DAYS);
 
   // The tray comes first: a window started hidden at login is only reachable
@@ -366,7 +415,8 @@ gotLock && app.whenReady().then(async () => {
   createTray();
   const startHidden = Boolean(tray) && autostart.wasStartedHidden(app);
   createWindow({ hidden: startHidden });
-  startAppTracking();
+  if (storage.getSetting('trackingPaused', false)) updateTrayMenu();
+  else startAppTracking();
   if (!startHidden) askAboutAutostartOnce();
   checkGoal();
   setInterval(checkGoal, LIMIT_CHECK_MS);
