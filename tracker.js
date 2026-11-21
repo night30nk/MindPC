@@ -7,11 +7,11 @@ let intervalId = null;
 let activeWinFn = null;
 let lastError = null;
 
-// Reads the focused window, throwing if active-win cannot be loaded or run.
-// Dynamic import because active-win is an ESM package.
+// Reads the focused window, throwing if get-windows cannot be loaded or run.
+// Dynamic import because get-windows is an ESM package.
 async function readActiveWindow() {
   if (!activeWinFn) {
-    const mod = await import('active-win');
+    const mod = await import('get-windows');
     activeWinFn = mod.activeWindow;
   }
   // MindPC only needs the app name. Disabling these checks means macOS never

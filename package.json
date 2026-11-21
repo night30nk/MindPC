@@ -24,7 +24,7 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "active-win",
+      "get-windows",
       "electron"
     ]
   },
@@ -52,9 +52,6 @@
     "electronmon": "^2.0.4",
     "jest": "^30.5.2",
     "wait-on": "^9.5.1"
-  },
-  "dependencies": {
-    "active-win": "^9.0.0"
   },
   "productName": "MindPC",
   "build": {
@@ -130,5 +127,8 @@
         "x11-utils"
       ]
     }
+  },
+  "dependencies": {
+    "get-windows": "10.0.0"
   }
 }
