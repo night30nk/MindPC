@@ -1,5 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router";
+import { useState, useEffect } from "react";
 import {
   BarChart,
   Bar,
@@ -10,7 +9,7 @@ import {
   CartesianGrid,
 } from "recharts";
 import {
-  apiRequest,
+  api,
   formatDuration,
   formatTime,
   formatShortDate,
@@ -18,52 +17,66 @@ import {
   getNDaysAgoString,
 } from "../api";
 
+// Custom Recharts Tooltip
+function CustomTooltip({ active, payload }) {
+  if (active && payload && payload.length) {
+    const data = payload[0].payload;
+    return (
+      <div className="bg-slate-900 border border-slate-700 px-3 py-2 rounded-lg text-xs shadow-lg">
+        <p className="font-semibold text-slate-200">{data.date}</p>
+        <p className="text-blue-400 font-bold">{data.formatted}</p>
+      </div>
+    );
+  }
+  return null;
+}
+
+// Reads every view for one date from the local database.
+async function fetchDashboard(date) {
+  const fromDate = getNDaysAgoString(6, date); // 7-day window ending on the date
+  const [apps, daily, sessions] = await Promise.all([
+    api.getApps(date),
+    api.getDaily(fromDate, date),
+    api.getSessions(date),
+  ]);
+  return { date, apps, daily, sessions };
+}
+
 export default function Dashboard() {
-  const navigate = useNavigate();
   const [selectedDate, setSelectedDate] = useState(getTodayString());
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState(null); // last successful load, tagged with its date
   const [error, setError] = useState(null);
-
-  // Stats data
-  const [appsData, setAppsData] = useState([]);
-  const [dailyData, setDailyData] = useState([]);
-  const [sessionsData, setSessionsData] = useState([]);
-
-  // Check auth
-  useEffect(() => {
-    if (!localStorage.getItem("token")) {
-      navigate("/login");
-    }
-  }, [navigate]);
-
-  const loadDashboardData = useCallback(async (date) => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const fromDate = getNDaysAgoString(6, date); // 7-day window ending on selectedDate
-      const toDate = date;
-
-      // Fetch all three endpoints in parallel
-      const [apps, daily, sessions] = await Promise.all([
-        apiRequest(`/api/stats/apps?date=${date}`),
-        apiRequest(`/api/stats/daily?from=${fromDate}&to=${toDate}`),
-        apiRequest(`/api/sessions?date=${date}`),
-      ]);
-
-      setAppsData(apps || []);
-      setDailyData(daily || []);
-      setSessionsData(sessions || []);
-    } catch (err) {
-      setError(err.message || "Failed to load dashboard data");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
-    loadDashboardData(selectedDate);
-  }, [selectedDate, loadDashboardData]);
+    let cancelled = false;
+    const load = () =>
+      fetchDashboard(selectedDate)
+        .then((result) => {
+          if (cancelled) return;
+          setData(result);
+          setError(null);
+        })
+        .catch((err) => {
+          if (!cancelled) setError(err.message || "Failed to load dashboard data");
+        });
+
+    load();
+
+    // Today is still being recorded, so keep it fresh in the background.
+    if (selectedDate !== getTodayString()) return () => { cancelled = true; };
+    const timer = setInterval(load, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [selectedDate, reloadKey]);
+
+  // Show the skeleton until data for the selected date has arrived.
+  const loading = !error && data?.date !== selectedDate;
+  const appsData = data?.date === selectedDate ? data.apps : [];
+  const dailyData = data?.daily ?? [];
+  const sessionsData = data?.date === selectedDate ? data.sessions : [];
 
   // Navigate date helpers
   const handlePrevDay = () => {
@@ -92,20 +105,6 @@ export default function Dashboard() {
     formatted: formatDuration(d.duration),
   }));
 
-  // Custom Recharts Tooltip
-  const CustomTooltip = ({ active, payload }) => {
-    if (active && payload && payload.length) {
-      const data = payload[0].payload;
-      return (
-        <div className="bg-slate-900 border border-slate-700 px-3 py-2 rounded-lg text-xs shadow-lg">
-          <p className="font-semibold text-slate-200">{data.date}</p>
-          <p className="text-blue-400 font-bold">{data.formatted}</p>
-        </div>
-      );
-    }
-    return null;
-  };
-
   return (
     <div className="space-y-8">
       {/* Top Controls: Date picker & quick buttons */}
@@ -115,7 +114,7 @@ export default function Dashboard() {
             Daily Overview
           </h1>
           <p className="text-xs text-slate-400">
-            Monitor activity and screen time across your devices
+            Your activity and screen time on this computer
           </p>
         </div>
 
@@ -157,7 +156,7 @@ export default function Dashboard() {
             <span>{error}</span>
           </div>
           <button
-            onClick={() => loadDashboardData(selectedDate)}
+            onClick={() => setReloadKey((k) => k + 1)}
             className="px-3 py-1 text-xs font-semibold rounded bg-red-900/80 hover:bg-red-800 text-white"
           >
             Retry
@@ -280,7 +279,7 @@ export default function Dashboard() {
                   <span className="text-2xl mb-2">⏱️</span>
                   <span>No sessions logged for this calendar date.</span>
                   <span className="text-slate-600 mt-1">
-                    Keep MindPC running on your PC to record activity.
+                    MindPC records in the background while it is running.
                   </span>
                 </div>
               ) : (

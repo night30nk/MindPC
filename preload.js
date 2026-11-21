@@ -1,15 +1,17 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-// Expose safe, scoped API to the renderer process
+// Expose a small, scoped API to the dashboard. All data stays on this machine.
 contextBridge.exposeInMainWorld('mindpc', {
-  login: (email, password) => ipcRenderer.invoke('mindpc:login', { email, password }),
-  register: (name, email, password) => ipcRenderer.invoke('mindpc:register', { name, email, password }),
-  logout: () => ipcRenderer.invoke('mindpc:logout'),
-  getStatus: () => ipcRenderer.invoke('mindpc:getStatus'),
-  onAppChange: (callback) => {
-    ipcRenderer.on('mindpc:appChange', (_event, data) => callback(data));
-  },
-  onSyncUpdate: (callback) => {
-    ipcRenderer.on('mindpc:syncUpdate', (_event, data) => callback(data));
+  getDaily: (from, to) => ipcRenderer.invoke('stats:daily', { from, to }),
+  getApps: (date) => ipcRenderer.invoke('stats:apps', { date }),
+  getSessions: (date) => ipcRenderer.invoke('sessions:list', { date }),
+  getTracking: () => ipcRenderer.invoke('tracking:get'),
+  setTracking: (enabled) => ipcRenderer.invoke('tracking:set', { enabled }),
+  exportData: () => ipcRenderer.invoke('data:export'),
+  deleteAllData: () => ipcRenderer.invoke('data:deleteAll'),
+  onTrackingChange: (callback) => {
+    const listener = (_event, data) => callback(data);
+    ipcRenderer.on('tracking:changed', listener);
+    return () => ipcRenderer.removeListener('tracking:changed', listener);
   },
 });

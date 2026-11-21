@@ -1,372 +1,246 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, powerMonitor } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, powerMonitor, dialog } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
-const os = require('node:os');
-const { BACKEND_URL } = require('./config');
 const SessionManager = require('./sessionManager');
+const Storage = require('./storage');
 const { startTracking, stopTracking, isTracking } = require('./tracker');
-const LocalQueue = require('./localQueue');
-const { startSync, stopSync, performSync, getSyncState } = require('./sync');
+
+const RETENTION_DAYS = 90;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Set by `pnpm dev` so the window loads the Vite dev server with hot reload.
+const DEV_URL = process.env.MINDPC_DEV_URL;
 
 let mainWindow = null;
 let tray = null;
 let isQuitting = false;
-let localQueue = null;
+let storage = null;
 
 const sessionManager = new SessionManager();
 
-// ── Local Queue Singleton in app.getPath('userData') ────────────────
-function getLocalQueue() {
-  if (!localQueue) {
-    const qPath = path.join(app.getPath('userData'), 'sessions-queue.json');
-    localQueue = new LocalQueue(qPath);
-  }
-  return localQueue;
+// ── Single instance: a second copy would double-count every session ──
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
 }
+app.on('second-instance', () => showWindow());
 
-// ── Auth storage helper in app.getPath('userData') ───────────────────
-function getAuthFilePath() {
-  return path.join(app.getPath('userData'), 'auth.json');
-}
-
-function loadAuthData() {
-  try {
-    const file = getAuthFilePath();
-    if (fs.existsSync(file)) {
-      const content = fs.readFileSync(file, 'utf8');
-      return JSON.parse(content);
-    }
-  } catch (err) {
-    console.error('Error reading auth file:', err.message);
-  }
-  return null;
-}
-
-function saveAuthData(data) {
-  try {
-    const file = getAuthFilePath();
-    fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
-  } catch (err) {
-    console.error('Error saving auth file:', err.message);
-  }
-}
-
-function clearAuthData() {
-  try {
-    const file = getAuthFilePath();
-    if (fs.existsSync(file)) {
-      fs.unlinkSync(file);
-    }
-  } catch (err) {
-    console.error('Error clearing auth file:', err.message);
-  }
-}
-
-// ── Register device helper ───────────────────────────────────────────
-async function registerDevice(token) {
-  const deviceName = os.hostname() || 'Windows Device';
-  const platform = process.platform;
-
-  const res = await fetch(`${BACKEND_URL}/api/devices`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ deviceName, platform }),
-  });
-
-  const json = await res.json();
-  if (json.success && json.data?.device) {
-    return json.data.device.id;
-  }
-  throw new Error(json.message || 'Failed to register device');
-}
-
-// ── Broadcast UI Status ──────────────────────────────────────────────
-function broadcastStatus() {
+// ── Tracking lifecycle ───────────────────────────────────────────────
+function broadcastTracking() {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('mindpc:syncUpdate', {
-      syncState: getSyncState(),
-      queueStats: getLocalQueue().getStats(),
-    });
+    mainWindow.webContents.send('tracking:changed', { tracking: isTracking() });
   }
+  updateTrayMenu();
 }
 
-// ── Tracking & Sync lifecycle helpers ────────────────────────────────
-function startAppServices(deviceId) {
-  if (deviceId) {
-    sessionManager.setDeviceId(deviceId);
-  }
-  const q = getLocalQueue();
-
-  if (!isTracking()) {
-    startTracking(sessionManager, q, ({ currentApp, isIdle, queueStats }) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('mindpc:appChange', {
-          currentApp,
-          isIdle,
-          tracking: true,
-          queueStats: queueStats || q.getStats(),
-          syncState: getSyncState(),
-        });
-      }
-    });
-  }
-
-  startSync({
-    localQueue: q,
-    getAuth: loadAuthData,
-    onStatusUpdate: () => broadcastStatus(),
-  });
-}
-
-function stopAppServices() {
-  stopTracking();
-  stopSync();
-
+// Closes the in-progress session and saves it. Used on pause, quit, sleep, lock.
+function flushSession() {
   const flushed = sessionManager.flush();
-  if (flushed.length > 0) {
-    getLocalQueue().add(flushed);
-    for (const s of flushed) console.log('[TRACKER] Flushed session on stop:', s);
-  }
-
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('mindpc:appChange', {
-      currentApp: null,
-      isIdle: false,
-      tracking: false,
-      queueStats: getLocalQueue().getStats(),
-      syncState: getSyncState(),
-    });
+  try {
+    storage.addSessions(flushed);
+    storage.saveOpenSession(null);
+  } catch (err) {
+    console.error('[TRACKER] Failed to save session:', err.message);
   }
 }
 
-// ── Window Creation ──────────────────────────────────────────────────
+function startAppTracking() {
+  if (isTracking()) return;
+  startTracking(sessionManager, storage);
+  broadcastTracking();
+}
+
+function stopAppTracking() {
+  if (!isTracking()) return;
+  stopTracking();
+  flushSession();
+  broadcastTracking();
+}
+
+// If the app crashed or lost power, close whatever was open at the last tick.
+function recoverCrashedSession() {
+  const open = storage.getOpenSession();
+  if (!open) return;
+  storage.addSessions(sessionManager.recover(open));
+  storage.saveOpenSession(null);
+}
+
+// ── Window ───────────────────────────────────────────────────────────
+function showWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 440,
-    height: 700,
-    resizable: false,
+    width: 1100,
+    height: 760,
+    minWidth: 720,
+    minHeight: 560,
     autoHideMenuBar: true,
+    backgroundColor: '#020617',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
       preload: path.join(__dirname, 'preload.js'),
     },
   });
 
-  mainWindow.loadFile(path.join(__dirname, 'index.html'));
+  if (DEV_URL) {
+    mainWindow.loadURL(DEV_URL);
+  } else {
+    mainWindow.loadFile(path.join(__dirname, 'dashboard', 'dist', 'index.html'));
+  }
 
+  // Keep tracking in the background when the window is closed. Only possible if
+  // there is a tray icon to bring it back from (some Linux desktops have none).
   mainWindow.on('close', (event) => {
-    if (!isQuitting) {
+    if (!isQuitting && tray) {
       event.preventDefault();
       mainWindow.hide();
     }
   });
 }
 
-// ── Tray Setup ───────────────────────────────────────────────────────
-function createTray() {
-  const icon = nativeImage.createFromDataURL(
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAZElEQVQ4T2NkoBAwUqifYdQAUmzg/38Ghv9nGBj+n2Vg+P8fjwYGBob///4zMDCiG8D4n4GBgeE/QxO6Bv7/fxqLBlAUI8s2og1A1k14XUvQBmLSz8j0M+H4mFSAETVSEjQSZAMA+4M6n/i6xT0AAAAASUVORK5CYII='
+// ── Tray ─────────────────────────────────────────────────────────────
+function updateTrayMenu() {
+  if (!tray) return;
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Open MindPC', click: () => showWindow() },
+      {
+        label: isTracking() ? 'Pause tracking' : 'Resume tracking',
+        click: () => (isTracking() ? stopAppTracking() : startAppTracking()),
+      },
+      { type: 'separator' },
+      {
+        label: 'Quit',
+        click: () => {
+          isQuitting = true;
+          app.quit();
+        },
+      },
+    ])
   );
-
-  tray = new Tray(icon);
-  tray.setToolTip('MindPC');
-
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: 'Open MindPC',
-      click: () => {
-        if (mainWindow) {
-          mainWindow.show();
-          mainWindow.focus();
-        }
-      },
-    },
-    { type: 'separator' },
-    {
-      label: 'Quit',
-      click: () => {
-        isQuitting = true;
-        app.quit();
-      },
-    },
-  ]);
-
-  tray.setContextMenu(contextMenu);
-
-  tray.on('double-click', () => {
-    if (mainWindow) {
-      mainWindow.show();
-      mainWindow.focus();
-    }
-  });
 }
 
-// ── IPC Handlers ─────────────────────────────────────────────────────
-ipcMain.handle('mindpc:getStatus', async () => {
-  const auth = loadAuthData();
-  const q = getLocalQueue();
-  if (auth && auth.token && auth.user) {
-    return {
-      success: true,
-      loggedIn: true,
-      user: auth.user,
-      deviceId: auth.deviceId,
-      tracking: isTracking(),
-      currentApp: sessionManager.getCurrentApp(),
-      syncState: getSyncState(),
-      queueStats: q.getStats(),
-    };
-  }
-  return { success: true, loggedIn: false };
-});
-
-ipcMain.handle('mindpc:login', async (_event, { email, password }) => {
+function createTray() {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    });
-
-    const json = await res.json();
-    if (!json.success) {
-      return { success: false, message: json.message || 'Login failed' };
-    }
-
-    const { token, user } = json.data;
-    const deviceId = await registerDevice(token);
-
-    saveAuthData({ token, user, deviceId });
-    startAppServices(deviceId);
-
-    return {
-      success: true,
-      user,
-      deviceId,
-      tracking: true,
-      syncState: getSyncState(),
-      queueStats: getLocalQueue().getStats(),
-    };
+    const icon = nativeImage.createFromDataURL(
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAZElEQVQ4T2NkoBAwUqifYdQAUmzg/38Ghv9nGBj+n2Vg+P8fjwYGBob///4zMDCiG8D4n4GBgeE/QxO6Bv7/fxqLBlAUI8s2og1A1k14XUvQBmLSz8j0M+H4mFSAETVSEjQSZAMA+4M6n/i6xT0AAAAASUVORK5CYII='
+    );
+    tray = new Tray(icon);
+    tray.setToolTip('MindPC');
+    tray.on('double-click', () => showWindow());
+    updateTrayMenu();
   } catch (err) {
-    return { success: false, message: err.message || 'Unable to connect to server' };
+    console.error('[TRAY] Could not create tray icon:', err.message);
+    tray = null;
   }
-});
+}
 
-ipcMain.handle('mindpc:register', async (_event, { name, email, password }) => {
-  try {
-    const regRes = await fetch(`${BACKEND_URL}/api/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email, password }),
-    });
-
-    const regJson = await regRes.json();
-    if (!regJson.success) {
-      return { success: false, message: regJson.message || 'Registration failed' };
-    }
-
-    const loginRes = await fetch(`${BACKEND_URL}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    });
-
-    const loginJson = await loginRes.json();
-    if (!loginJson.success) {
-      return { success: false, message: loginJson.message || 'Auto-login failed' };
-    }
-
-    const { token, user } = loginJson.data;
-    const deviceId = await registerDevice(token);
-
-    saveAuthData({ token, user, deviceId });
-    startAppServices(deviceId);
-
-    return {
-      success: true,
-      user,
-      deviceId,
-      tracking: true,
-      syncState: getSyncState(),
-      queueStats: getLocalQueue().getStats(),
-    };
-  } catch (err) {
-    return { success: false, message: err.message || 'Unable to connect to server' };
+// ── IPC: all data is local ───────────────────────────────────────────
+function requireDate(value) {
+  if (typeof value !== 'string' || !DATE_RE.test(value) || Number.isNaN(new Date(value).getTime())) {
+    throw new Error('Invalid date. Use YYYY-MM-DD');
   }
+  return value;
+}
+
+ipcMain.handle('stats:daily', (_event, { from, to }) => {
+  requireDate(from);
+  requireDate(to);
+  if (from > to) throw new Error('from must be before or equal to to');
+  return storage.getDaily(from, to);
 });
 
-ipcMain.handle('mindpc:logout', async () => {
-  stopAppServices();
-  clearAuthData();
-  return { success: true };
+ipcMain.handle('stats:apps', (_event, { date }) => storage.getApps(requireDate(date)));
+
+ipcMain.handle('sessions:list', (_event, { date }) => storage.getSessions(requireDate(date)));
+
+ipcMain.handle('tracking:get', () => ({ tracking: isTracking() }));
+
+ipcMain.handle('tracking:set', (_event, { enabled }) => {
+  if (enabled) startAppTracking();
+  else stopAppTracking();
+  return { tracking: isTracking() };
 });
 
-// ── App Lifecycle ────────────────────────────────────────────────────
-app.whenReady().then(() => {
+ipcMain.handle('data:export', async () => {
+  const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export MindPC data',
+    defaultPath: 'mindpc-export.json',
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+  });
+  if (canceled || !filePath) return { exported: false };
+
+  const sessions = storage.exportAll();
+  fs.writeFileSync(
+    filePath,
+    JSON.stringify({ exportedAt: new Date().toISOString(), sessions }, null, 2),
+    'utf8'
+  );
+  return { exported: true, count: sessions.length };
+});
+
+// The confirmation lives here, not in the page, so the page cannot skip it.
+ipcMain.handle('data:deleteAll', async () => {
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'warning',
+    buttons: ['Cancel', 'Delete everything'],
+    defaultId: 0,
+    cancelId: 0,
+    title: 'Delete all data',
+    message: 'Delete all your tracked data?',
+    detail: 'This permanently removes every recorded session from this computer. It cannot be undone.',
+  });
+  if (response !== 1) return { deleted: false };
+
+  storage.deleteAll();
+  // Drop the live session too, so tracking restarts from a clean slate.
+  sessionManager.flush();
+  return { deleted: true };
+});
+
+// ── App lifecycle ────────────────────────────────────────────────────
+gotLock && app.whenReady().then(() => {
+  storage = new Storage(path.join(app.getPath('userData'), 'mindpc.db'));
+  recoverCrashedSession();
+  storage.purgeOlderThan(RETENTION_DAYS);
+
   createWindow();
   createTray();
+  startAppTracking();
 
-  const auth = loadAuthData();
-  if (auth && auth.token && auth.deviceId) {
-    startAppServices(auth.deviceId);
+  // Sleeping, locking or shutting down ends the session cleanly instead of
+  // letting it run until the next tick notices the gap.
+  for (const event of ['suspend', 'lock-screen', 'shutdown']) {
+    powerMonitor.on(event, () => {
+      if (isTracking()) flushSession();
+    });
   }
 
-  powerMonitor.on('suspend', () => {
-    console.log('[POWER] Suspend detected — flushing active session');
-    const flushed = sessionManager.flush();
-    if (flushed.length > 0) {
-      getLocalQueue().add(flushed);
-      for (const s of flushed) console.log('[TRACKER] Flushed on suspend:', s);
-    }
-  });
-
-  powerMonitor.on('shutdown', () => {
-    console.log('[POWER] Shutdown detected — flushing active session');
-    const flushed = sessionManager.flush();
-    if (flushed.length > 0) {
-      getLocalQueue().add(flushed);
-      for (const s of flushed) console.log('[TRACKER] Flushed on shutdown:', s);
-    }
-  });
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    } else if (mainWindow) {
-      mainWindow.show();
-    }
-  });
+  app.on('activate', () => showWindow());
 });
 
-let quittingDone = false;
-app.on('before-quit', async (event) => {
-  if (quittingDone) return;
-  event.preventDefault();
-  quittingDone = true;
+app.on('before-quit', () => {
   isQuitting = true;
-
-  console.log('[APP] Exiting — stopping tracking and performing final sync...');
   stopTracking();
-  stopSync();
-
-  const flushed = sessionManager.flush();
-  if (flushed.length > 0) {
-    getLocalQueue().add(flushed);
-    for (const s of flushed) console.log('[TRACKER] Flushed on quit:', s);
+  if (storage) {
+    flushSession();
+    storage.close();
+    storage = null;
   }
+});
 
-  try {
-    await performSync({
-      localQueue: getLocalQueue(),
-      getAuth: loadAuthData,
-    });
-  } catch {
-    // Ignore network error on exit
-  } finally {
-    app.quit();
-  }
+// The app lives in the tray, so closing the window must not quit it. With no
+// tray there would be no way back to the window, so quit instead.
+app.on('window-all-closed', () => {
+  if (!tray) app.quit();
 });
