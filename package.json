@@ -13,7 +13,8 @@
     "dist": "pnpm build:dashboard && electron-builder --publish never",
     "dist:mac": "pnpm build:dashboard && electron-builder --mac",
     "dist:win": "pnpm build:dashboard && electron-builder --win",
-    "dist:linux": "pnpm build:dashboard && electron-builder --linux"
+    "dist:linux": "pnpm build:dashboard && electron-builder --linux",
+    "smoke": "node scripts/smoke-test.js"
   },
   "jest": {
     "testPathIgnorePatterns": [
@@ -23,7 +24,7 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "active-win",
+      "get-windows",
       "electron"
     ]
   },
@@ -51,9 +52,6 @@
     "electronmon": "^2.0.4",
     "jest": "^30.5.2",
     "wait-on": "^9.5.1"
-  },
-  "dependencies": {
-    "active-win": "^9.0.0"
   },
   "productName": "MindPC",
   "build": {
@@ -114,6 +112,23 @@
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "afterPack": "scripts/after-pack.js",
     "npmRebuild": false,
-    "asar": false
+    "asar": false,
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "x11-utils"
+      ]
+    }
+  },
+  "dependencies": {
+    "get-windows": "10.0.0"
   }
 }

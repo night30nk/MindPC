@@ -7,20 +7,25 @@ let intervalId = null;
 let activeWinFn = null;
 let lastError = null;
 
-// Dynamic import for active-win (ESM package)
+// Reads the focused window, throwing if get-windows cannot be loaded or run.
+// Dynamic import because get-windows is an ESM package.
+async function readActiveWindow() {
+  if (!activeWinFn) {
+    const mod = await import('get-windows');
+    activeWinFn = mod.activeWindow;
+  }
+  // MindPC only needs the app name. Disabling these checks means macOS never
+  // asks for Accessibility or Screen Recording access, and window titles and
+  // URLs are never read.
+  return await activeWinFn({
+    accessibilityPermission: false,
+    screenRecordingPermission: false,
+  });
+}
+
 async function getActiveWindow() {
   try {
-    if (!activeWinFn) {
-      const mod = await import('active-win');
-      activeWinFn = mod.activeWindow;
-    }
-    // MindPC only needs the app name. Disabling these checks means macOS never
-    // asks for Accessibility or Screen Recording access, and window titles and
-    // URLs are never read.
-    return await activeWinFn({
-      accessibilityPermission: false,
-      screenRecordingPermission: false,
-    });
+    return await readActiveWindow();
   } catch (err) {
     // Treat errors (e.g. lock screen, screen saver, no focused window) as no
     // active window. Log each distinct error once so a broken install is
@@ -97,6 +102,7 @@ function isTracking() {
 }
 
 module.exports = {
+  probeActiveWindow: readActiveWindow,
   startTracking,
   stopTracking,
   isTracking,

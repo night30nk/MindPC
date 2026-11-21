@@ -1,10 +1,12 @@
 const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, powerMonitor, dialog, Notification } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 const SessionManager = require('./sessionManager');
 const Storage = require('./storage');
 const { startTracking, stopTracking, isTracking } = require('./tracker');
 const autostart = require('./autostart');
+const { runSelfTest } = require('./selftest');
 const { CATEGORIES, summarize } = require('./categories');
 const { evaluateLimit, notificationText, localDateKey } = require('./limits');
 
@@ -12,6 +14,14 @@ const RETENTION_DAYS = 90;
 const LIMIT_CHECK_MS = 30000;
 const MAX_GOAL_MINUTES = 24 * 60;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// `--self-test` checks that this build can start (used by CI), then exits.
+// It runs on a throwaway data folder so it never touches real data.
+const SELF_TEST = process.argv.includes('--self-test');
+const SELF_TEST_OUT = (process.argv.find((a) => a.startsWith('--self-test-out=')) || '').split('=')[1];
+if (SELF_TEST) {
+  app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'mindpc-selftest-')));
+}
 
 // Set by `pnpm dev` so the window loads the Vite dev server with hot reload.
 const DEV_URL = process.env.MINDPC_DEV_URL;
@@ -340,7 +350,13 @@ ipcMain.handle('data:deleteAll', async () => {
 });
 
 // ── App lifecycle ────────────────────────────────────────────────────
-gotLock && app.whenReady().then(() => {
+gotLock && app.whenReady().then(async () => {
+  if (SELF_TEST) {
+    const ok = await runSelfTest({ nativeImage, outFile: SELF_TEST_OUT });
+    app.exit(ok ? 0 : 1);
+    return;
+  }
+
   storage = new Storage(path.join(app.getPath('userData'), 'mindpc.db'));
   recoverCrashedSession();
   storage.purgeOlderThan(RETENTION_DAYS);
