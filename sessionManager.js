@@ -1,15 +1,19 @@
 // Pure, unit-testable session tracking logic.
 // Contains zero Electron, Node timer, or OS-specific dependencies.
 
+const MIN_SESSION_SECONDS = 2;
+const SLEEP_GAP_MS = 30000;
+
+// First local-midnight strictly after the given timestamp.
+function nextLocalMidnight(ms) {
+  const d = new Date(ms);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
+}
+
 class SessionManager {
-  constructor(deviceId = 1) {
-    this.deviceId = deviceId;
+  constructor() {
     this.currentSession = null;
     this.lastSeenTime = null;
-  }
-
-  setDeviceId(id) {
-    this.deviceId = id;
   }
 
   getCurrentApp() {
@@ -21,28 +25,59 @@ class SessionManager {
     };
   }
 
-  // Completes a session and returns the session object, or null if < 2 seconds
+  // Snapshot of the in-progress session, persisted every tick so a crash or
+  // power cut loses at most one tick. Null when nothing is being tracked.
+  getOpenState() {
+    if (!this.currentSession) return null;
+    return {
+      appName: this.currentSession.appName,
+      appIdentifier: this.currentSession.appIdentifier,
+      startTime: this.currentSession.startTime,
+      lastSeenTime: this.currentSession.lastSeenTime,
+    };
+  }
+
+  // Closes a session left open by a crash, at the last time it was seen.
+  recover(openState) {
+    if (!openState) return [];
+    return this._finalizeSession(
+      {
+        appName: openState.appName,
+        appIdentifier: openState.appIdentifier,
+        startTime: openState.startTime,
+      },
+      openState.lastSeenTime
+    );
+  }
+
+  // Completes a session and returns an array of session objects.
+  // Sessions under 2 seconds are dropped. Sessions that span local midnight are
+  // split so each day gets only the time that actually fell on it.
   _finalizeSession(session, endTimestamp) {
     const startMs = session.startTime;
     const endMs = Math.max(startMs, endTimestamp);
-    const durationSeconds = Math.round((endMs - startMs) / 1000);
 
-    // Rule: Ignore sessions shorter than 2 seconds
-    if (durationSeconds < 2) {
-      return null;
+    if (Math.round((endMs - startMs) / 1000) < MIN_SESSION_SECONDS) {
+      return [];
     }
 
-    const randomSuffix = Math.random().toString(36).substring(2, 9);
-    const clientSessionId = `${this.deviceId}-${startMs}-${randomSuffix}`;
-
-    return {
-      clientSessionId,
-      appName: session.appName,
-      appIdentifier: session.appIdentifier,
-      startTime: new Date(startMs).toISOString(),
-      endTime: new Date(endMs).toISOString(),
-      durationSeconds,
-    };
+    const segments = [];
+    let segStart = startMs;
+    while (segStart < endMs) {
+      const segEnd = Math.min(endMs, nextLocalMidnight(segStart));
+      const durationSeconds = Math.round((segEnd - segStart) / 1000);
+      if (durationSeconds >= 1) {
+        segments.push({
+          appName: session.appName,
+          appIdentifier: session.appIdentifier,
+          startTime: new Date(segStart).toISOString(),
+          endTime: new Date(segEnd).toISOString(),
+          durationSeconds,
+        });
+      }
+      segStart = segEnd;
+    }
+    return segments;
   }
 
   /**
@@ -52,9 +87,11 @@ class SessionManager {
    * @param {string} [params.appIdentifier] - Process executable name (e.g. chrome.exe)
    * @param {Date|number|string} params.now - Current timestamp
    * @param {boolean} [params.isIdle=false] - Whether user is currently idle
+   * @param {number} [params.idleSeconds=0] - How long the user has been idle. The
+   *   session is closed at the moment the user stopped, not when idle was detected.
    * @returns {Array<Object>} Completed sessions (empty if none finished)
    */
-  update({ appName, appIdentifier, now, isIdle = false }) {
+  update({ appName, appIdentifier, now, isIdle = false, idleSeconds = 0 }) {
     const timestamp = now instanceof Date ? now.getTime() : new Date(now).getTime();
     const completed = [];
 
@@ -62,9 +99,8 @@ class SessionManager {
     // Close old session at its lastSeenTime, not at "now"
     if (this.currentSession && this.lastSeenTime !== null) {
       const gapMs = timestamp - this.lastSeenTime;
-      if (gapMs > 30000) {
-        const closed = this._finalizeSession(this.currentSession, this.lastSeenTime);
-        if (closed) completed.push(closed);
+      if (gapMs > SLEEP_GAP_MS) {
+        completed.push(...this._finalizeSession(this.currentSession, this.lastSeenTime));
         this.currentSession = null;
       }
     }
@@ -74,8 +110,12 @@ class SessionManager {
     // Case 1: Idle or No active window (e.g. lock screen)
     if (isIdle || !hasActiveApp) {
       if (this.currentSession) {
-        const closed = this._finalizeSession(this.currentSession, timestamp);
-        if (closed) completed.push(closed);
+        // The idle threshold has already elapsed by the time we notice, so end
+        // the session when the user last touched the machine.
+        const endTs = isIdle
+          ? Math.max(this.currentSession.startTime, timestamp - idleSeconds * 1000)
+          : timestamp;
+        completed.push(...this._finalizeSession(this.currentSession, endTs));
         this.currentSession = null;
       }
       this.lastSeenTime = timestamp;
@@ -89,8 +129,7 @@ class SessionManager {
         this.currentSession.lastSeenTime = timestamp;
       } else {
         // Different app: close old session at timestamp, start new one
-        const closed = this._finalizeSession(this.currentSession, timestamp);
-        if (closed) completed.push(closed);
+        completed.push(...this._finalizeSession(this.currentSession, timestamp));
 
         this.currentSession = {
           appName,
@@ -114,22 +153,21 @@ class SessionManager {
   }
 
   /**
-   * Flush active session (used on quit, suspend, or shutdown).
+   * Flush active session (used on quit, suspend, pause or shutdown).
    * @param {Date|number|string} now
    * @returns {Array<Object>} Completed sessions
    */
   flush(now = Date.now()) {
     const timestamp = now instanceof Date ? now.getTime() : new Date(now).getTime();
-    const completed = [];
+    let completed = [];
 
     if (this.currentSession) {
       let endTime = timestamp;
       // If a gap occurred right before flush, end at lastSeenTime
-      if (this.lastSeenTime && (timestamp - this.lastSeenTime > 30000)) {
+      if (this.lastSeenTime && (timestamp - this.lastSeenTime > SLEEP_GAP_MS)) {
         endTime = this.lastSeenTime;
       }
-      const closed = this._finalizeSession(this.currentSession, endTime);
-      if (closed) completed.push(closed);
+      completed = this._finalizeSession(this.currentSession, endTime);
       this.currentSession = null;
     }
 

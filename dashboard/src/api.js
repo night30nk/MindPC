@@ -1,59 +1,23 @@
-// Small fetch wrapper for MindPC backend API
+// Bridge to the desktop app. All data lives on this computer and is read
+// through the preload script (see ../preload.js); there is no server.
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-
-export function getUserTimeZone() {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata';
-  } catch {
-    return 'Asia/Kolkata';
+function bridge() {
+  if (!window.mindpc) {
+    throw new Error('MindPC must be opened from the desktop app.');
   }
+  return window.mindpc;
 }
 
-export async function apiRequest(endpoint, options = {}) {
-  const token = localStorage.getItem('token');
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(options.headers || {}),
-  };
-
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  // Auto-append timezone query param for GET requests if not specified
-  let url = `${BASE_URL}${endpoint}`;
-  if (!options.method || options.method.toUpperCase() === 'GET') {
-    const tz = getUserTimeZone();
-    const separator = url.includes('?') ? '&' : '?';
-    if (!url.includes('tz=')) {
-      url += `${separator}tz=${encodeURIComponent(tz)}`;
-    }
-  }
-
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  });
-
-  // Handle unauthorized / token expired
-  if (response.status === 401) {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    if (window.location.pathname !== '/login') {
-      window.location.href = '/login';
-    }
-    throw new Error('Session expired. Please log in again.');
-  }
-
-  const data = await response.json();
-
-  if (!response.ok || !data.success) {
-    throw new Error(data.message || 'Request failed');
-  }
-
-  return data.data;
-}
+export const api = {
+  getDaily: (from, to) => bridge().getDaily(from, to),
+  getApps: (date) => bridge().getApps(date),
+  getSessions: (date) => bridge().getSessions(date),
+  getTracking: () => bridge().getTracking(),
+  setTracking: (enabled) => bridge().setTracking(enabled),
+  exportData: () => bridge().exportData(),
+  deleteAllData: () => bridge().deleteAllData(),
+  onTrackingChange: (cb) => bridge().onTrackingChange(cb),
+};
 
 // ── Formatter Helpers ────────────────────────────────────────────────
 export function formatDuration(seconds) {

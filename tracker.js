@@ -1,5 +1,7 @@
 const path = require('node:path');
-const { isSystemIdle } = require('./idle');
+const { getIdleSeconds, IDLE_THRESHOLD_SECONDS } = require('./idle');
+
+const TICK_MS = 3000;
 
 let intervalId = null;
 let activeWinFn = null;
@@ -21,19 +23,22 @@ async function getActiveWindow() {
 /**
  * Starts periodic polling every 3 seconds.
  * @param {SessionManager} sessionManager
- * @param {LocalQueue} [localQueue] - Local queue instance for persisting sessions
+ * @param {Storage} storage - Completed sessions and the open session are saved here
  * @param {Function} [onTick] - Optional callback receiving current state
  */
-function startTracking(sessionManager, localQueue, onTick) {
+function startTracking(sessionManager, storage, onTick) {
   if (intervalId) return;
 
   const tick = async () => {
-    const isIdle = isSystemIdle();
+    const idleSeconds = getIdleSeconds();
+    const isIdle = idleSeconds >= IDLE_THRESHOLD_SECONDS;
     let appName = null;
     let appIdentifier = null;
 
     if (!isIdle) {
       const winInfo = await getActiveWindow();
+      // Tracking may have been stopped while we awaited the OS.
+      if (!intervalId) return;
       if (winInfo && winInfo.owner) {
         appName = winInfo.owner.name || 'Unknown';
         appIdentifier = winInfo.owner.path
@@ -47,29 +52,24 @@ function startTracking(sessionManager, localQueue, onTick) {
       appIdentifier,
       now: new Date(),
       isIdle,
+      idleSeconds,
     });
 
-    if (completed.length > 0) {
-      for (const session of completed) {
-        console.log('[TRACKER] Completed session:', session);
-      }
-      if (localQueue) {
-        localQueue.add(completed);
-      }
+    try {
+      storage.addSessions(completed);
+      storage.saveOpenSession(sessionManager.getOpenState());
+    } catch (err) {
+      console.error('[TRACKER] Failed to save to local database:', err.message);
     }
 
     if (typeof onTick === 'function') {
-      onTick({
-        currentApp: sessionManager.getCurrentApp(),
-        isIdle,
-        queueStats: localQueue ? localQueue.getStats() : null,
-      });
+      onTick({ currentApp: sessionManager.getCurrentApp(), isIdle });
     }
   };
 
   // Run first check immediately, then every 3 seconds
   tick();
-  intervalId = setInterval(tick, 3000);
+  intervalId = setInterval(tick, TICK_MS);
 }
 
 function stopTracking() {
