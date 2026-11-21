@@ -1,11 +1,16 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, powerMonitor, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, powerMonitor, dialog, Notification } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const SessionManager = require('./sessionManager');
 const Storage = require('./storage');
 const { startTracking, stopTracking, isTracking } = require('./tracker');
+const autostart = require('./autostart');
+const { CATEGORIES, summarize } = require('./categories');
+const { evaluateLimit, notificationText, localDateKey } = require('./limits');
 
 const RETENTION_DAYS = 90;
+const LIMIT_CHECK_MS = 30000;
+const MAX_GOAL_MINUTES = 24 * 60;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 // Set by `pnpm dev` so the window loads the Vite dev server with hot reload.
@@ -65,6 +70,86 @@ function recoverCrashedSession() {
   storage.saveOpenSession(null);
 }
 
+// ── Daily goal ───────────────────────────────────────────────────────
+// Screen time so far today: saved sessions plus the one still in progress.
+function todaySeconds(now = new Date()) {
+  const today = localDateKey(now);
+  let total = storage.getDaily(today, today)[0]?.duration ?? 0;
+
+  const open = sessionManager.getOpenState();
+  if (open) {
+    const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const start = Math.max(open.startTime, midnight);
+    total += Math.max(0, (open.lastSeenTime - start) / 1000);
+  }
+  return total;
+}
+
+function checkGoal() {
+  if (!storage) return;
+  const limitMinutes = storage.getSetting('dailyLimitMinutes', null);
+  const previous = storage.getSetting('limitState', null);
+  const { notify, state } = evaluateLimit({
+    totalSeconds: todaySeconds(),
+    limitMinutes,
+    today: localDateKey(),
+    state: previous,
+  });
+
+  if (JSON.stringify(state) !== JSON.stringify(previous)) {
+    storage.setSetting('limitState', state);
+  }
+  if (notify === null) return;
+
+  console.log(`[GOAL] ${notify}% of the daily goal reached`);
+  if (!Notification.isSupported()) return;
+  const notification = new Notification(notificationText(notify, limitMinutes));
+  notification.on('click', () => showWindow());
+  notification.show();
+}
+
+// ── Launch at login ──────────────────────────────────────────────────
+// Only for the installed app: in development the "app" is the generic Electron
+// binary, and registering that as a login item would be wrong.
+function getAutostartState() {
+  if (!app.isPackaged) return { available: false, enabled: false };
+  try {
+    return { available: true, enabled: autostart.getAutostart(app) };
+  } catch (err) {
+    console.error('[AUTOSTART] Could not read login item:', err.message);
+    return { available: false, enabled: false };
+  }
+}
+
+function setAutostartEnabled(enabled) {
+  if (!app.isPackaged) return getAutostartState();
+  try {
+    autostart.setAutostart(app, Boolean(enabled));
+  } catch (err) {
+    console.error('[AUTOSTART] Could not change login item:', err.message);
+  }
+  updateTrayMenu();
+  return getAutostartState();
+}
+
+// Asked once, on first run, because a tracker is only useful if it is running.
+async function askAboutAutostartOnce() {
+  if (!getAutostartState().available || storage.getSetting('autostartAsked', false)) return;
+  storage.setSetting('autostartAsked', true);
+
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    buttons: ['Start automatically', 'Not now'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Launch at login',
+    message: 'Start MindPC when you log in?',
+    detail:
+      'MindPC only records time while it is running. It starts quietly in the tray. You can change this anytime from the tray menu or the dashboard.',
+  });
+  if (response === 0) setAutostartEnabled(true);
+}
+
 // ── Window ───────────────────────────────────────────────────────────
 function showWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -76,8 +161,9 @@ function showWindow() {
   mainWindow.focus();
 }
 
-function createWindow() {
+function createWindow({ hidden = false } = {}) {
   mainWindow = new BrowserWindow({
+    show: !hidden,
     width: 1100,
     height: 760,
     minWidth: 720,
@@ -118,6 +204,16 @@ function updateTrayMenu() {
         label: isTracking() ? 'Pause tracking' : 'Resume tracking',
         click: () => (isTracking() ? stopAppTracking() : startAppTracking()),
       },
+      ...(getAutostartState().available
+        ? [
+            {
+              label: 'Launch at login',
+              type: 'checkbox',
+              checked: getAutostartState().enabled,
+              click: (item) => setAutostartEnabled(item.checked),
+            },
+          ]
+        : []),
       { type: 'separator' },
       {
         label: 'Quit',
@@ -165,9 +261,38 @@ ipcMain.handle('stats:daily', (_event, { from, to }) => {
   return storage.getDaily(from, to);
 });
 
-ipcMain.handle('stats:apps', (_event, { date }) => storage.getApps(requireDate(date)));
+// Apps for a day, each with its category, plus seconds per category.
+ipcMain.handle('stats:apps', (_event, { date }) =>
+  summarize(storage.getApps(requireDate(date)), storage.getCategoryOverrides())
+);
+
+ipcMain.handle('category:set', (_event, { appName, category }) => {
+  if (typeof appName !== 'string' || appName.length === 0 || appName.length > 200) {
+    throw new Error('Invalid app name');
+  }
+  if (category !== null && !CATEGORIES.includes(category)) {
+    throw new Error('Invalid category');
+  }
+  storage.setCategoryOverride(appName, category);
+  return { appName, category };
+});
+
+ipcMain.handle('goal:get', () => ({ minutes: storage.getSetting('dailyLimitMinutes', null) }));
+
+ipcMain.handle('goal:set', (_event, { minutes }) => {
+  if (minutes !== null && !(Number.isInteger(minutes) && minutes >= 1 && minutes <= MAX_GOAL_MINUTES)) {
+    throw new Error('Goal must be between 1 minute and 24 hours');
+  }
+  storage.setSetting('dailyLimitMinutes', minutes);
+  checkGoal();
+  return { minutes };
+});
 
 ipcMain.handle('sessions:list', (_event, { date }) => storage.getSessions(requireDate(date)));
+
+ipcMain.handle('autostart:get', () => getAutostartState());
+
+ipcMain.handle('autostart:set', (_event, { enabled }) => setAutostartEnabled(enabled));
 
 ipcMain.handle('tracking:get', () => ({ tracking: isTracking() }));
 
@@ -208,6 +333,7 @@ ipcMain.handle('data:deleteAll', async () => {
   if (response !== 1) return { deleted: false };
 
   storage.deleteAll();
+  storage.setSetting('limitState', null);
   // Drop the live session too, so tracking restarts from a clean slate.
   sessionManager.flush();
   return { deleted: true };
@@ -219,9 +345,15 @@ gotLock && app.whenReady().then(() => {
   recoverCrashedSession();
   storage.purgeOlderThan(RETENTION_DAYS);
 
-  createWindow();
+  // The tray comes first: a window started hidden at login is only reachable
+  // through it, so only hide when a tray icon exists.
   createTray();
+  const startHidden = Boolean(tray) && autostart.wasStartedHidden(app);
+  createWindow({ hidden: startHidden });
   startAppTracking();
+  if (!startHidden) askAboutAutostartOnce();
+  checkGoal();
+  setInterval(checkGoal, LIMIT_CHECK_MS);
 
   // Sleeping, locking or shutting down ends the session cleanly instead of
   // letting it run until the next tick notices the gap.

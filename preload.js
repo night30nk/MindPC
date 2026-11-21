@@ -5,8 +5,13 @@ contextBridge.exposeInMainWorld('mindpc', {
   getDaily: (from, to) => ipcRenderer.invoke('stats:daily', { from, to }),
   getApps: (date) => ipcRenderer.invoke('stats:apps', { date }),
   getSessions: (date) => ipcRenderer.invoke('sessions:list', { date }),
+  setCategory: (appName, category) => ipcRenderer.invoke('category:set', { appName, category }),
+  getGoal: () => ipcRenderer.invoke('goal:get'),
+  setGoal: (minutes) => ipcRenderer.invoke('goal:set', { minutes }),
   getTracking: () => ipcRenderer.invoke('tracking:get'),
   setTracking: (enabled) => ipcRenderer.invoke('tracking:set', { enabled }),
+  getAutostart: () => ipcRenderer.invoke('autostart:get'),
+  setAutostart: (enabled) => ipcRenderer.invoke('autostart:set', { enabled }),
   exportData: () => ipcRenderer.invoke('data:export'),
   deleteAllData: () => ipcRenderer.invoke('data:deleteAll'),
   onTrackingChange: (callback) => {

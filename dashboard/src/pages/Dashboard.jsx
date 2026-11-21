@@ -31,6 +31,88 @@ function CustomTooltip({ active, payload }) {
   return null;
 }
 
+const CATEGORY_STYLE = {
+  productive: { label: "Productive", bar: "bg-emerald-500", text: "text-emerald-400" },
+  neutral: { label: "Neutral", bar: "bg-slate-500", text: "text-slate-400" },
+  distracting: { label: "Distracting", bar: "bg-rose-500", text: "text-rose-400" },
+};
+const CATEGORY_ORDER = ["productive", "neutral", "distracting"];
+const GOAL_HOURS = [1, 2, 3, 4, 5, 6, 8, 10, 12];
+
+// Stacked bar of how the day split between productive, neutral and distracting.
+function CategoryBreakdown({ totals, totalSeconds }) {
+  if (totalSeconds <= 0) return null;
+  return (
+    <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl shadow-lg">
+      <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+        How your time was spent
+      </span>
+      <div className="flex w-full h-3 rounded-full overflow-hidden bg-slate-950 border border-slate-800 mt-4">
+        {CATEGORY_ORDER.map((key) => (
+          <div
+            key={key}
+            className={CATEGORY_STYLE[key].bar}
+            style={{ width: `${(totals[key] / totalSeconds) * 100}%` }}
+          />
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-x-8 gap-y-2 mt-4">
+        {CATEGORY_ORDER.map((key) => (
+          <div key={key} className="text-xs">
+            <span className={`font-semibold ${CATEGORY_STYLE[key].text}`}>
+              {CATEGORY_STYLE[key].label}
+            </span>{" "}
+            <span className="text-slate-200 font-semibold">{formatDuration(totals[key])}</span>{" "}
+            <span className="text-slate-500">
+              ({Math.round((totals[key] / totalSeconds) * 100)}%)
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Optional daily screen-time goal, with progress for the selected day.
+function GoalControl({ goalMinutes, totalSeconds, onChange }) {
+  const hours = goalMinutes ? goalMinutes / 60 : null;
+  const options = hours && !GOAL_HOURS.includes(hours) ? [...GOAL_HOURS, hours].sort((a, b) => a - b) : GOAL_HOURS;
+  const percent = goalMinutes ? Math.min(100, (totalSeconds / (goalMinutes * 60)) * 100) : 0;
+
+  return (
+    <div className="mt-4 space-y-2">
+      <label className="flex items-center justify-between text-xs text-slate-400">
+        Daily goal
+        <select
+          value={hours ?? ""}
+          onChange={(e) => onChange(e.target.value === "" ? null : Math.round(Number(e.target.value) * 60))}
+          className="px-2 py-1 rounded-md bg-slate-950 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-blue-500"
+        >
+          <option value="">Off</option>
+          {options.map((h) => (
+            <option key={h} value={h}>
+              {formatDuration(h * 3600)}
+            </option>
+          ))}
+        </select>
+      </label>
+      {goalMinutes && (
+        <>
+          <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
+            <div
+              className={`h-2 rounded-full transition-all duration-300 ${percent >= 80 ? "bg-amber-500" : "bg-blue-500"}`}
+              style={{ width: `${percent}%` }}
+            />
+          </div>
+          <span className="text-[11px] text-slate-500">
+            {Math.round((totalSeconds / (goalMinutes * 60)) * 100)}% of {formatDuration(goalMinutes * 60)}
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
 // Reads every view for one date from the local database.
 async function fetchDashboard(date) {
   const fromDate = getNDaysAgoString(6, date); // 7-day window ending on the date
@@ -39,7 +121,7 @@ async function fetchDashboard(date) {
     api.getDaily(fromDate, date),
     api.getSessions(date),
   ]);
-  return { date, apps, daily, sessions };
+  return { date, apps: apps.apps, totals: apps.totals, daily, sessions };
 }
 
 export default function Dashboard() {
@@ -47,6 +129,14 @@ export default function Dashboard() {
   const [data, setData] = useState(null); // last successful load, tagged with its date
   const [error, setError] = useState(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [goalMinutes, setGoalMinutes] = useState(null);
+
+  useEffect(() => {
+    api
+      .getGoal()
+      .then((g) => setGoalMinutes(g.minutes))
+      .catch(() => setGoalMinutes(null));
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,8 +165,27 @@ export default function Dashboard() {
   // Show the skeleton until data for the selected date has arrived.
   const loading = !error && data?.date !== selectedDate;
   const appsData = data?.date === selectedDate ? data.apps : [];
+  const totals = data?.date === selectedDate ? data.totals : { productive: 0, neutral: 0, distracting: 0 };
   const dailyData = data?.daily ?? [];
   const sessionsData = data?.date === selectedDate ? data.sessions : [];
+
+  const handleGoalChange = async (minutes) => {
+    try {
+      const saved = await api.setGoal(minutes);
+      setGoalMinutes(saved.minutes);
+    } catch (err) {
+      setError(err.message || "Could not save the goal");
+    }
+  };
+
+  const handleCategoryChange = async (appName, category) => {
+    try {
+      await api.setCategory(appName, category);
+      setReloadKey((k) => k + 1);
+    } catch (err) {
+      setError(err.message || "Could not save the category");
+    }
+  };
 
   // Navigate date helpers
   const handlePrevDay = () => {
@@ -189,6 +298,11 @@ export default function Dashboard() {
                   ? `Active across ${appsData.length} app${appsData.length === 1 ? "" : "s"}`
                   : "No recorded activity for this date"}
               </span>
+              <GoalControl
+                goalMinutes={goalMinutes}
+                totalSeconds={totalSeconds}
+                onChange={handleGoalChange}
+              />
             </div>
 
             {/* 7-Day Trend Chart */}
@@ -226,6 +340,8 @@ export default function Dashboard() {
             </div>
           </div>
 
+          <CategoryBreakdown totals={totals} totalSeconds={totalSeconds} />
+
           {/* Top Apps & Timeline Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Top Applications list */}
@@ -247,17 +363,31 @@ export default function Dashboard() {
 
                     return (
                       <div key={idx} className="space-y-1.5">
-                        <div className="flex justify-between text-xs font-medium">
-                          <span className="text-slate-200 truncate max-w-[180px]">
+                        <div className="flex justify-between items-center gap-2 text-xs font-medium">
+                          <span className="text-slate-200 truncate max-w-[140px]" title={app.name}>
                             {app.name}
                           </span>
-                          <span className="text-slate-400 font-semibold">
-                            {formatDuration(app.duration)} ({pct}%)
+                          <span className="flex items-center gap-2">
+                            <span className="text-slate-400 font-semibold">
+                              {formatDuration(app.duration)} ({pct}%)
+                            </span>
+                            <select
+                              value={app.category}
+                              onChange={(e) => handleCategoryChange(app.name, e.target.value)}
+                              aria-label={`Category for ${app.name}`}
+                              className={`px-1 py-0.5 rounded bg-slate-950 border border-slate-700 text-[10px] focus:outline-none focus:border-blue-500 ${CATEGORY_STYLE[app.category].text}`}
+                            >
+                              {CATEGORY_ORDER.map((key) => (
+                                <option key={key} value={key}>
+                                  {CATEGORY_STYLE[key].label}
+                                </option>
+                              ))}
+                            </select>
                           </span>
                         </div>
                         <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
                           <div
-                            className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                            className={`${CATEGORY_STYLE[app.category].bar} h-2 rounded-full transition-all duration-300`}
                             style={{ width: `${pct}%` }}
                           ></div>
                         </div>

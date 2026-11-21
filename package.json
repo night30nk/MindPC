@@ -64,12 +64,8 @@
       "buildResources": "assets"
     },
     "files": [
-      "main.js",
-      "preload.js",
-      "tracker.js",
-      "idle.js",
-      "sessionManager.js",
-      "storage.js",
+      "*.js",
+      "!**/*.test.js",
       "assets/**",
       "dashboard/dist/**",
       "package.json"
