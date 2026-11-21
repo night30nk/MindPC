@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>MindPC Companion</title>
+  <style>
+    body { width: 320px; margin: 0; padding: 16px; font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: #14181f; background: #fff; }
+    @media (prefers-color-scheme: dark) { body { color: #ecedf2; background: #171a21; } input { background: #0e1014; color: inherit; border-color: #333a46; } .muted { color: #9aa2b1; } }
+    h1 { font-size: 15px; margin: 0 0 4px; }
+    .muted { color: #596170; margin: 0 0 12px; }
+    #status { font-weight: 600; margin: 10px 0; }
+    input { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid #c9ced8; border-radius: 6px; font: 12px ui-monospace, Menlo, monospace; }
+    .row { display: flex; gap: 8px; margin-top: 8px; }
+    button { flex: 1; padding: 7px 10px; border-radius: 6px; border: 1px solid #c9ced8; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+    button.primary { background: #2358d6; border-color: #2358d6; color: #fff; }
+    .ok { color: #17835c; } .bad { color: #cb3a33; }
+  </style>
+</head>
+<body>
+  <h1>MindPC Companion</h1>
+  <p class="muted">Shares only the website name (like github.com) with the MindPC app on this computer. Never the page address or title. Private windows are ignored.</p>
+  <div id="status" role="status">Checking…</div>
+  <label for="code" class="muted">Pairing code from MindPC (Browser sites)</label>
+  <input id="code" type="text" autocomplete="off" spellcheck="false" placeholder="Paste the code here">
+  <div class="row">
+    <button id="save" class="primary" type="button">Connect</button>
+    <button id="forget" type="button">Disconnect</button>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

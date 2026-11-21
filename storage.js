@@ -176,6 +176,34 @@ class Storage {
       .all(date);
   }
 
+  // One row per app per day in [from, to]: the raw material for per-day
+  // category splits (the category is decided later, from the app).
+  getDailyApps(from, to) {
+    return this.db
+      .prepare(
+        `SELECT date(start_time, 'localtime') AS date, app_name AS name,
+                MAX(app_identifier) AS identifier, SUM(duration_seconds) AS duration
+         FROM sessions
+         WHERE date(start_time, 'localtime') BETWEEN ? AND ?
+         GROUP BY date, app_name`
+      )
+      .all(from, to);
+  }
+
+  // Total seconds per app across [from, to], biggest first.
+  getAppsRange(from, to) {
+    return this.db
+      .prepare(
+        `SELECT app_name AS name, MAX(app_identifier) AS identifier,
+                SUM(duration_seconds) AS duration
+         FROM sessions
+         WHERE date(start_time, 'localtime') BETWEEN ? AND ?
+         GROUP BY app_name
+         ORDER BY duration DESC`
+      )
+      .all(from, to);
+  }
+
   // Total seconds per day for [from, to] inclusive. Days with no usage are
   // included with 0 so charts have no gaps.
   getDaily(from, to) {

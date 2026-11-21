@@ -186,4 +186,24 @@ describe('Storage', () => {
     upgraded.close();
     fs.rmSync(path.dirname(file), { recursive: true });
   });
+
+  it('returns per-app rows per day and across a range', () => {
+    store.addSessions([
+      session(day1, 60, 'Chrome'),
+      session(day1 + 600000, 30, 'Chrome'),
+      session(day1 + 900000, 120, 'Code'),
+      session(day2, 45, 'Chrome'),
+    ]);
+
+    const daily = store.getDailyApps('2024-01-10', '2024-01-11');
+    expect(daily).toContainEqual({ date: '2024-01-10', name: 'Chrome', identifier: 'chrome.exe', duration: 90 });
+    expect(daily).toContainEqual({ date: '2024-01-10', name: 'Code', identifier: 'code.exe', duration: 120 });
+    expect(daily).toContainEqual({ date: '2024-01-11', name: 'Chrome', identifier: 'chrome.exe', duration: 45 });
+
+    expect(store.getAppsRange('2024-01-10', '2024-01-11')).toEqual([
+      { name: 'Code', identifier: 'code.exe', duration: 120 },
+      { name: 'Chrome', identifier: 'chrome.exe', duration: 135 },
+    ].sort((a, b) => b.duration - a.duration));
+    expect(store.getAppsRange('2024-02-01', '2024-02-02')).toEqual([]);
+  });
 });

@@ -1,6 +1,8 @@
 const path = require('node:path');
 const { getIdleSeconds, IDLE_THRESHOLD_SECONDS } = require('./idle');
 const { isOwnWindow } = require('./ownApp');
+const { isBrowser } = require('./browsers');
+const { SITE_PREFIX } = require('./categories');
 
 const TICK_MS = 3000;
 
@@ -44,8 +46,12 @@ async function getActiveWindow() {
  * @param {SessionManager} sessionManager
  * @param {Storage} storage - Completed sessions and the open session are saved here
  * @param {Function} [onTick] - Optional callback receiving current state
+ * @param {Object} [options]
+ * @param {Function} [options.getSite] - Returns the domain open in the focused
+ *   browser (from the companion extension), or null. When a browser is in front
+ *   and a site is known, the session is for the site, not the browser.
  */
-function startTracking(sessionManager, storage, onTick) {
+function startTracking(sessionManager, storage, onTick, options = {}) {
   if (intervalId) return;
 
   const tick = async () => {
@@ -64,6 +70,17 @@ function startTracking(sessionManager, storage, onTick) {
         appIdentifier = winInfo.owner.path
           ? path.basename(winInfo.owner.path)
           : `${appName}.exe`;
+
+        // A site is its own entry, whichever browser it was opened in. With no
+        // site known (no extension, a new tab, an internal page), the time stays
+        // with the browser so the total never loses any.
+        if (options.getSite && isBrowser(appName, appIdentifier)) {
+          const site = options.getSite();
+          if (site) {
+            appName = site;
+            appIdentifier = `${SITE_PREFIX}${site}`;
+          }
+        }
       }
     }
 

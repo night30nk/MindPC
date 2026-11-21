@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "MindPC Companion",
+  "version": "0.1.0",
+  "description": "Tells the MindPC app on this computer which website is open, so time on sites is tracked separately from the browser. Only the site name is shared, and it never leaves your computer.",
+  "permissions": ["tabs", "storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "MindPC Companion", "default_popup": "popup.html" },
+  "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" }
+}

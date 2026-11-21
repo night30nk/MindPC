@@ -53,6 +53,12 @@ describe('packaging', () => {
     expect(missing).toEqual([]);
   });
 
+  it('ships the browser extension inside the app', () => {
+    for (const f of ['extension/manifest.json', 'extension/background.js', 'extension/popup.html', 'extension/popup.js', 'extension/icons/128.png']) {
+      expect(isPackaged(f)).toBe(true);
+    }
+  });
+
   it('does not ship test files', () => {
     expect(isPackaged('sessionManager.test.js')).toBe(false);
     expect(isPackaged('sessionManager.js')).toBe(true);

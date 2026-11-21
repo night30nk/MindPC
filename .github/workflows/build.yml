@@ -50,6 +50,11 @@ jobs:
       - name: Smoke test the packaged app
         run: pnpm smoke
 
+      # The browser extension is not part of the app installers; ship it beside them.
+      - name: Package the browser extension
+        if: runner.os == 'Linux'
+        run: cd extension && zip -r "../MindPC-Companion-${{ github.ref_name }}.zip" .
+
       - uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.os }}
@@ -60,6 +65,7 @@ jobs:
             release/*.exe
             release/*.AppImage
             release/*.deb
+            MindPC-Companion-*.zip
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

@@ -1,4 +1,4 @@
-const { categorize, summarize, CATEGORIES } = require('./categories');
+const { categorize, summarize, CATEGORIES, SITE_PREFIX } = require('./categories');
 
 describe('categorize', () => {
   it('recognises work apps across operating systems', () => {
@@ -46,6 +46,41 @@ describe('categorize', () => {
     for (const name of ['Code', 'Netflix', 'Foo', '']) {
       expect(CATEGORIES).toContain(categorize(name, name));
     }
+  });
+});
+
+describe('categorize websites', () => {
+  const site = (host, overrides) => categorize(host, `${SITE_PREFIX}${host}`, overrides);
+
+  it('sorts well-known sites and leaves the rest neutral', () => {
+    expect(site('github.com')).toBe('productive');
+    expect(site('youtube.com')).toBe('distracting');
+    expect(site('mail.google.com')).toBe('neutral');
+    expect(site('example.org')).toBe('neutral');
+  });
+
+  it('matches subdomains of a listed site, but not look-alike domains', () => {
+    expect(site('gist.github.com')).toBe('productive');
+    expect(site('music.youtube.com')).toBe('distracting');
+    expect(site('notgithub.com')).toBe('neutral');
+    expect(site('github.com.evil.example')).toBe('neutral');
+  });
+
+  it('keeps Google products separate: docs is work, mail is neutral', () => {
+    expect(site('docs.google.com')).toBe('productive');
+    expect(site('mail.google.com')).toBe('neutral');
+    expect(site('google.com')).toBe('neutral');
+  });
+
+  it('lets the user override a site, and overrides win', () => {
+    expect(site('youtube.com', { 'youtube.com': 'productive' })).toBe('productive');
+    expect(site('example.org', { 'example.org': 'distracting' })).toBe('distracting');
+  });
+
+  it('never applies app keyword rules to a site', () => {
+    // "code" would make an app productive, but a site is judged by its domain.
+    expect(site('barcode.example.com')).toBe('neutral');
+    expect(site('steam.example.com')).toBe('neutral');
   });
 });
 
