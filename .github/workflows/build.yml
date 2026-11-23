@@ -80,4 +80,4 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           draft: true
-          files: installers/*
+          files: installers/**/*
